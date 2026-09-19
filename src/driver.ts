@@ -26,6 +26,12 @@ export interface ObservedTarget {
 	selected?: string;
 	expanded?: string;
 	href?: string;
+	/**
+	 * A stable, usually non-localised handle for the target: an element id or
+	 * data-testid in a page, an accessibility identifier in an application. A
+	 * decision layer that has this does not have to guess from translated labels.
+	 */
+	identifier?: string;
 }
 
 /**
@@ -65,10 +71,11 @@ export interface ObservationSnapshot {
 export interface Driver {
 	/**
 	 * Identity of the observed surface. The loop compares it before and after a
-	 * decision, so a run that silently moved (another tab, another window) stops
-	 * instead of acting on a surface nobody chose.
+	 * decision, so a run that silently moved (another tab, another window, a dialog
+	 * stealing focus) stops instead of acting on a surface nobody chose. A driver may
+	 * answer asynchronously when the identity has to be queried.
 	 */
-	id(): unknown;
+	id(): unknown | Promise<unknown>;
 	observe(signal?: AbortSignal): Promise<ObservationSnapshot>;
 	/**
 	 * Classifies a read failure that the driver understands better than the generic

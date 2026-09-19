@@ -165,7 +165,7 @@ export async function runJev(
 			const step = executed + 1;
 			stage = "observation";
 			signal.throwIfAborted();
-			const surface = options.driver.id();
+			const surface = await options.driver.id();
 			const snapshot = await options.driver.observe(signal);
 			lastPage = {
 				url: snapshot.data.url,
@@ -194,7 +194,7 @@ export async function runJev(
 				if (!["CLICK", "SELECT"].includes(decision.operation))
 					await snapshot.assertFresh();
 				// A driver that moved underneath the run must not be acted on.
-				if (surface !== options.driver.id())
+				if (surface !== (await options.driver.id()))
 					throw new StaleObservationError("Active tab changed.");
 				if (decision.operation === "REVIEW")
 					return finish(
@@ -300,7 +300,7 @@ export async function runJev(
 					}
 					text = generated.text;
 				}
-				if (surface !== options.driver.id())
+				if (surface !== (await options.driver.id()))
 					throw new StaleObservationError("Active tab changed.");
 				signal.throwIfAborted();
 				const entry: RunStep = {

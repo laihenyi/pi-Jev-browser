@@ -42,7 +42,8 @@
     "check": "tsc --noEmit",
     "test": "node --test --experimental-strip-types test/*.test.ts",
     "benchmark": "node benchmarks/run.ts",
-    "install-browser": "playwright install chromium"
+    "install-browser": "playwright install chromium",
+    "build:ax-helper": "swiftc -O -o desktop/ax-helper desktop/ax-helper.swift"
   },
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0",

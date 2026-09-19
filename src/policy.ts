@@ -34,7 +34,11 @@ const TEXT_HELPER_MAX_TOKENS = 4096;
  */
 const TEXT_HELPER_MAX_RETRIES = 2;
 
-export function buildQuestions(observation: Observation, goal: string) {
+export function buildQuestions(
+	observation: Observation,
+	goal: string,
+	surfaceRules: string = rules,
+) {
 	const criteria: ChoiceCriteria = {
 		WAIT: "Wait briefly for loading or disabled controls to become ready.",
 		BLOCKED:
@@ -57,6 +61,7 @@ export function buildQuestions(observation: Observation, goal: string) {
 			selected: target.selected ?? null,
 			expanded: target.expanded ?? null,
 			href: target.href ?? null,
+			identifier: target.identifier ?? null,
 		};
 	}
 	if (observation.scrollUp)
@@ -69,7 +74,7 @@ export function buildQuestions(observation: Observation, goal: string) {
 		type: "choice",
 		instructions: {
 			goal,
-			rules,
+			rules: surfaceRules,
 			task: "Choose the single operation and target that best advances the goal. Complete visible required choices BEFORE scrolling. If any color is permitted and none is selected, choose an available color now. Compare clicking each specific target against scrolling. An informational help link does not select a configuration option.",
 		},
 		criteria,
@@ -208,6 +213,12 @@ export function createJevPolicy(options: {
 	text: TextGenerator;
 	client?: TypeSafeClient;
 	credentials?: JevCredentials;
+	/**
+	 * Surface-specific rules text. The calibration of this decision layer lives in
+	 * these rules, so a different surface (a desktop application, a terminal) needs
+	 * its own text rather than the browser's. Defaults to the browser rules.
+	 */
+	rules?: string;
 }): JevPolicy {
 	let client = options.client;
 	const clientFor = () => {
@@ -220,7 +231,7 @@ export function createJevPolicy(options: {
 	};
 	return {
 		async choose(observation, goal, history, signal) {
-			const questions = buildQuestions(observation, goal);
+			const questions = buildQuestions(observation, goal, options.rules);
 			const result = await clientFor().systemOne(
 				{
 					state: JSON.stringify({

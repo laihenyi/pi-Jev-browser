@@ -35,3 +35,5 @@ benchmarks/results/
 profiles/
 *.user-data/
 
+# Compiled macOS accessibility helper (build with npm run build:ax-helper)
+desktop/ax-helper
