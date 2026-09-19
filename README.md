@@ -149,7 +149,7 @@ are `done_unverified`, `blocked`, `needs_review`, `uncertain`, `step_limit`,
 | `model_review` | Jev reported REVIEW: the next step needs sensitive data, submits something, or crosses a safety barrier such as a CAPTCHA. |
 | `min_probability` | The selected choice fell below the requested `minProbability`. |
 | `step_limit` / `evaluation_limit` | The action or evaluation budget ran out. |
-| `repeated_action` | The same action on the same target executed three times without advancing. |
+| `repeated_action` | An identical action stopped producing new state (a control cycling between states it already produced), or ran 12 times in a row as a backstop. Repeated presses that keep producing new state are allowed, because entering `111` is legitimate input. |
 | `scroll_oscillation` | `SCROLL_UP` and `SCROLL_DOWN` alternated repeatedly, a two-cycle that is not exploration. |
 | `stale_observations` | Four consecutive observations were invalidated before an action could run. |
 | `no_progress` | Three actions produced no observable change. |

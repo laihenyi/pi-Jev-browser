@@ -66,6 +66,19 @@ const MAX_DONE_SETTLE_RETRIES = 2;
  * Five alternating scrolls means the loop is oscillating, not exploring.
  */
 const MAX_SCROLL_REVERSALS = 4;
+
+/**
+ * Identical actions that produced a state this run has already seen. A toggle needs
+ * two states to cycle, so the third such action is the earliest honest signal.
+ */
+const MAX_STATE_REPEATS = 3;
+/**
+ * Backstop for a control whose every press yields a state that was never seen
+ * before. "New state" is not the same as "progress", and an observation cannot
+ * tell them apart, so this bounds the damage instead of deciding the question.
+ * Deliberately generous: entering twelve identical digits in a row is legitimate.
+ */
+const MAX_IDENTICAL_ACTIONS = 12;
 export type RunStatus =
 	| "done_unverified"
 	| "blocked"
@@ -136,7 +149,16 @@ export async function runJev(
 	let stage = "observation";
 	let lastPage: ObservedPage | undefined;
 	let lastActionKey: string | undefined;
-	let repeatedActions = 0;
+	/**
+	 * Identical actions are only suspicious when they stop producing new state.
+	 * Counting them outright was wrong: pressing the same digit three times is
+	 * legitimate input, and each press changed the window, so the run was stopped for
+	 * making progress. A toggle cycles through states it has already produced, while
+	 * entering a digit keeps producing states it has not.
+	 */
+	let repeatStates: string[] = [];
+	let stateRepeats = 0;
+	let identicalActions = 0;
 	let consecutiveStale = 0;
 	let scrollDirection: string | undefined;
 	let scrollReversals = 0;
@@ -330,23 +352,7 @@ export async function runJev(
 				entry.status = "executed";
 				consecutiveStale = 0;
 				const actionKey = `${decision.operation}:${decision.target?.id ?? ""}`;
-				repeatedActions =
-					decision.target !== undefined &&
-					actionKey === lastActionKey &&
-					!decision.operation.startsWith("SCROLL")
-						? repeatedActions + 1
-						: 1;
-				lastActionKey = actionKey;
 				await options.onStep?.({ ...entry });
-				if (repeatedActions >= 3) {
-					// Some widgets toggle on click or re-render after every interaction, so
-					// identical actions keep "succeeding" while the goal never advances.
-					return finish(
-						"blocked",
-						`${decision.operation} on ${JSON.stringify(decision.target?.label ?? actionKey)} executed ${repeatedActions} times without advancing the goal. The control likely toggles or needs manual handling; continue with jev_actions.`,
-						"repeated_action",
-					);
-				}
 				// Let event handlers render before the next read, without screenshot or network-idle waits.
 				await delay(
 					decision.target?.role === "radio" || decision.operation === "SELECT"
@@ -365,6 +371,7 @@ export async function runJev(
 				try {
 					const pageChanged =
 						JSON.stringify(after.data) !== JSON.stringify(snapshot.data);
+					const stateKey = JSON.stringify(after.data);
 					memory.actions.push({
 						action: decision.target?.label ?? decision.operation,
 						kind: decision.operation,
@@ -372,6 +379,46 @@ export async function runJev(
 						page_changed: pageChanged,
 					});
 					memory.actions.splice(0, Math.max(0, memory.actions.length - 10));
+					// The repeat guard lives here, after the state is known, because an identical
+					// action is only suspicious when it stops producing new state.
+					const sameAction =
+						decision.target !== undefined &&
+						actionKey === lastActionKey &&
+						!decision.operation.startsWith("SCROLL");
+					if (sameAction) {
+						identicalActions++;
+						// A repeat whose result this run already saw is a cycle, not progress: a
+						// toggle returns to where it was, an entry field keeps moving forward.
+						if (!pageChanged || repeatStates.includes(stateKey)) stateRepeats++;
+					} else {
+						identicalActions = 1;
+						stateRepeats = pageChanged ? 0 : 1;
+						repeatStates = [JSON.stringify(snapshot.data)];
+					}
+					if (pageChanged) {
+						repeatStates.push(stateKey);
+						if (repeatStates.length > 8) repeatStates.shift();
+					}
+					lastActionKey = actionKey;
+					if (stateRepeats >= MAX_STATE_REPEATS) {
+						// A widget that toggles on click, or re-renders without advancing, keeps
+						// "succeeding" while the goal stands still.
+						return finish(
+							"blocked",
+							`${decision.operation} on ${JSON.stringify(decision.target?.label ?? actionKey)} executed ${stateRepeats} times without producing a new state. The control likely toggles or needs manual handling; continue with jev_actions.`,
+							"repeated_action",
+						);
+					}
+					if (identicalActions >= MAX_IDENTICAL_ACTIONS) {
+						// Backstop for the undecidable case: a control whose every press yields a
+						// state that was never seen. Whether that is progress cannot be read off the
+						// observation, so this bounds the damage instead of deciding the question.
+						return finish(
+							"blocked",
+							`${decision.operation} on ${JSON.stringify(decision.target?.label ?? actionKey)} executed ${identicalActions} times in a row with changing state. Stopping before the step budget is consumed; continue with jev_actions if the goal is still worth pursuing.`,
+							"repeated_action",
+						);
+					}
 					// Only state-changing actions count as progress claims. A scroll changes
 					// what the agent sees by definition, and the page text of a long document
 					// often stays identical until new content comes into view.

@@ -248,3 +248,53 @@ test("driver read failures are classified by the driver, not by the loop", async
 	assert.equal(result.failure?.category, "navigation_context");
 	assert.equal(result.failure?.stage, "observation");
 });
+
+test("repeated presses that keep producing new state are allowed", async () => {
+	// Entering "1111111111" is ten identical presses. Each one changes the surface,
+	// which is progress, so the repeat guard must not stop the run. Before this
+	// criterion the run was killed after three presses while it was working.
+	const states = Array.from({ length: 10 }, (_, index) =>
+		observation({ text: "1".repeat(index + 1), targets: [target("one")] }),
+	);
+	const fake = fakeDriver({ observations: states });
+	const result = await runJev(
+		{ goal: "Enter ten ones", maxSteps: 10 },
+		{ driver: fake.driver, policy: scripted([{ target: target("one") }]) },
+	);
+	assert.equal(fake.executed.length, 10, "every press must have been sent");
+	assert.equal(result.stopReason, "step_limit", "the budget ends it, not the repeat guard");
+});
+
+test("a control that cycles between two states is still caught", async () => {
+	// The case the guard was added for: a widget that toggles on click. It changes
+	// the surface every time, but only ever returns to a state already seen.
+	const states = ["closed", "open", "closed", "open", "closed", "open"].map((text) =>
+		observation({ text, targets: [target("toggle")] }),
+	);
+	const fake = fakeDriver({ observations: states });
+	const result = await runJev(
+		{ goal: "Open the widget", maxSteps: 20 },
+		{ driver: fake.driver, policy: scripted([{ target: target("toggle") }]) },
+	);
+	assert.equal(result.status, "blocked");
+	assert.equal(result.stopReason, "repeated_action");
+	assert.equal(fake.executed.length, 4, "one extra press is needed to see the cycle");
+	assert.match(result.message, /without producing a new state/);
+});
+
+test("a control whose every press yields novel state is bounded by the backstop", async () => {
+	// "New state" is not the same as "progress", and the observation cannot tell the
+	// two apart, so this ends with a reason instead of consuming the whole budget.
+	const states = Array.from({ length: 30 }, (_, index) =>
+		observation({ text: `tick ${index}`, targets: [target("spinner")] }),
+	);
+	const fake = fakeDriver({ observations: states });
+	const result = await runJev(
+		{ goal: "Watch it spin", maxSteps: 30 },
+		{ driver: fake.driver, policy: scripted([{ target: target("spinner") }]) },
+	);
+	assert.equal(result.status, "blocked");
+	assert.equal(result.stopReason, "repeated_action");
+	assert.equal(fake.executed.length, 12);
+	assert.match(result.message, /in a row with changing state/);
+});
