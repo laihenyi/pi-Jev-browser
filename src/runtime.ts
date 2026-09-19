@@ -9,7 +9,7 @@ import { isUrlAllowed, readConfig } from "./config.ts";
 import { diagnosticRecord } from "./errors.ts";
 import { extractFromPage, type ExtractInput } from "./extract.ts";
 import { type RunMemory, type RunStep, runJev } from "./loop.ts";
-import { waitForDocument } from "./observe.ts";
+import { browserDriver, waitForDocument } from "./observe.ts";
 import type { JevPolicy } from "./policy.ts";
 import { installRecordingOverlay } from "./recording-overlay.ts";
 import { startStream } from "./stream.ts";
@@ -319,7 +319,7 @@ export class PiBrowserManager {
 			const result = await runJev(input, {
 				memory,
 				policy,
-				page: () => session.page,
+				driver: browserDriver(() => session.page),
 				signal,
 				onStep: async (step: RunStep) => {
 					await appendFile(tracePath, `${JSON.stringify(step)}\n`);

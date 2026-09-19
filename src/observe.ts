@@ -1,31 +1,20 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Page } from "playwright";
+import {
+	type Driver,
+	type Observation,
+	type ObservationSnapshot,
+	type ObservedTarget,
+	StaleObservationError,
+	type TargetOperation,
+} from "./driver.ts";
 
-export type TargetOperation = "CLICK" | "TYPE_TEXT" | "SELECT";
-export interface ObservedTarget {
-	id: string;
-	operation: TargetOperation;
-	label: string;
-	value: string;
-	option?: string;
-	role?: string;
-	checked?: string;
-	selected?: string;
-	expanded?: string;
-	href?: string;
-}
-export interface Observation {
-	url: string;
-	title: string;
-	text: string;
-	targets: ObservedTarget[];
-	offscreenControls?: { above: string[]; below: string[] };
-	selectedOptions?: Array<{ group: string; label: string; value: string }>;
-	scrollUp: boolean;
-	scrollDown: boolean;
-}
-
-export class StaleObservationError extends Error {}
+export {
+	type Observation,
+	type ObservedTarget,
+	StaleObservationError,
+	type TargetOperation,
+} from "./driver.ts";
 
 // The closure retains actual nodes, outside page globals. Model output can only
 // select an offered ID; it never becomes a selector or executable browser code.
@@ -453,4 +442,30 @@ async function observeDocument(page: Page) {
 		await handle.dispose().catch(() => undefined);
 		throw error;
 	}
+}
+
+/**
+ * The browser implementation of the loop's Driver contract.
+ *
+ * Everything Playwright-specific about driving a surface lives here, including the
+ * error vocabulary the loop must not know about: a destroyed execution context is
+ * a navigation in progress, and a document that never became readable is a browser
+ * condition rather than a generic failure.
+ */
+export function browserDriver(getPage: () => Page): Driver {
+	return {
+		// The page object is the surface identity: the manager swaps it when the run
+		// moves to another tab, and the loop stops instead of acting on the new one.
+		id: () => getPage(),
+		observe: (signal?: AbortSignal) => observe(getPage(), signal),
+		readFailureCategory(error: unknown) {
+			if (isNavigationReadError(error)) return "navigation_context";
+			if (
+				error instanceof Error &&
+				error.message.includes("PI_JEV_BROWSER_DOCUMENT_NOT_READY")
+			)
+				return "document_not_ready";
+			return undefined;
+		},
+	};
 }

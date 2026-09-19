@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { type Observation } from "../src/observe.ts";
+import { browserDriver, type Observation } from "../src/observe.ts";
 import { configurationError, diagnosticRecord, textOutputError } from "../src/errors.ts";
 import { type RunStep, runJev } from "../src/loop.ts";
 import { type JevPolicy } from "../src/policy.ts";
@@ -50,7 +50,7 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 				const result = await runJev(
 					{ goal: "Search for cats" },
 					{
-						page: () => page,
+						driver: browserDriver(() => page),
 						policy,
 						onStep: async (step) => {
 							recorded.push(step);
@@ -82,7 +82,7 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 				const result = await runJev(
 					{ goal: "Search" },
 					{
-						page: () => page,
+						driver: browserDriver(() => page),
 						policy: {
 							async choose(data) {
 								calls++;
@@ -113,7 +113,7 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 				const result = await runJev(
 					{ goal: "Search cats" },
 					{
-						page: () => page,
+						driver: browserDriver(() => page),
 						policy: {
 							async choose(data, _goal, history) {
 								if (calls++ === 0)
@@ -149,7 +149,7 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 			const result = await runJev(
 				{ goal: "Search" },
 				{
-					page: () => page,
+					driver: browserDriver(() => page),
 					policy: {
 						async choose() {
 							if (calls++ === 0) {
@@ -180,7 +180,7 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 					const result = await runJev(
 						{ goal: "Search", maxSteps: 1, minProbability: 0.6 },
 						{
-							page: () => page,
+							driver: browserDriver(() => page),
 							policy: {
 								async choose() {
 									return { operation, probability };
@@ -197,7 +197,7 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 				const result = await runJev(
 					{ goal: "Search" },
 					{
-						page: () => page,
+						driver: browserDriver(() => page),
 						signal: controller.signal,
 						policy: {
 							async choose(data) {
@@ -229,17 +229,17 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 				},
 			} satisfies JevPolicy;
 			await assert.rejects(
-				runJev({ goal: "   " }, { page: () => page, policy }),
+				runJev({ goal: "   " }, { driver: browserDriver(() => page), policy }),
 				/1–12000 characters/,
 			);
 			await assert.rejects(
-				runJev({ goal: "Search", maxSteps: 0 }, { page: () => page, policy }),
+				runJev({ goal: "Search", maxSteps: 0 }, { driver: browserDriver(() => page), policy }),
 				/1 to 60/,
 			);
 			await assert.rejects(
 				runJev(
 					{ goal: "Search", minProbability: 2 },
-					{ page: () => page, policy },
+					{ driver: browserDriver(() => page), policy },
 				),
 				/0 to 1/,
 			);
@@ -249,7 +249,7 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 			const configuration = await runJev(
 				{ goal: "Search" },
 				{
-					page: () => page,
+					driver: browserDriver(() => page),
 					policy: {
 						async choose() {
 							throw configurationError(
@@ -273,7 +273,7 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 			const badTextOutput = await runJev(
 				{ goal: "Search" },
 				{
-					page: () => page,
+					driver: browserDriver(() => page),
 					policy: {
 						async choose(data) {
 							return {
@@ -302,7 +302,7 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 			const provider = await runJev(
 				{ goal: "Search" },
 				{
-					page: () => page,
+					driver: browserDriver(() => page),
 					policy: {
 						async choose() {
 							throw new Error(
@@ -323,7 +323,7 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 			const logged = await runJev(
 				{ goal: "Search" },
 				{
-					page: () => page,
+					driver: browserDriver(() => page),
 					policy: {
 						async choose() {
 							throw new Error("400 invalid request: state contained sk-live-secret-token");
@@ -354,7 +354,7 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 				const result = await runJev(
 					{ goal: "Search cats" },
 					{
-						page: () => page,
+						driver: browserDriver(() => page),
 						policy: {
 							async choose(data) {
 								if (calls++ === 0)
@@ -404,7 +404,7 @@ test("a declined field value returns control instead of failing the run", async 
 		const result = await runJev(
 			{ goal: "Search for cats" },
 			{
-				page: () => page,
+				driver: browserDriver(() => page),
 				policy: {
 					async choose(data) {
 						return {
@@ -442,7 +442,7 @@ test("repeated identical actions and repeated stale reads stop the loop early", 
 			const result = await runJev(
 				{ goal: "Open the widget", maxSteps: 20 },
 				{
-					page: () => page,
+					driver: browserDriver(() => page),
 					policy: {
 						async choose(data) {
 							return {
@@ -479,7 +479,7 @@ test("repeated identical actions and repeated stale reads stop the loop early", 
 			const result = await runJev(
 				{ goal: "Reach the bottom", maxSteps: 6 },
 				{
-					page: () => page,
+					driver: browserDriver(() => page),
 					policy: {
 						async choose() {
 							calls++;
@@ -513,7 +513,7 @@ test("repeated identical actions and repeated stale reads stop the loop early", 
 			const result = await runJev(
 				{ goal: "Fill the query", maxSteps: 20 },
 				{
-					page: () => page,
+					driver: browserDriver(() => page),
 					policy: {
 						async choose(data) {
 							calls++;
@@ -566,7 +566,7 @@ test("a DONE decision is rejected while the page is still rendering", async () =
 		const result = await runJev(
 			{ goal: "Read the lowest fare" },
 			{
-				page: () => page,
+				driver: browserDriver(() => page),
 				onStep: async (step) => {
 					emitted.push(step);
 				},
@@ -617,7 +617,7 @@ test("a page that never settles accepts DONE with a warning", async () => {
 		const result = await runJev(
 			{ goal: "Read the counter" },
 			{
-				page: () => page,
+				driver: browserDriver(() => page),
 				policy: {
 					async choose() {
 						calls++;
@@ -650,7 +650,7 @@ test("alternating scroll directions stop the run instead of burning the budget",
 		const result = await runJev(
 			{ goal: "Find a control that this page does not have", maxSteps: 12 },
 			{
-				page: () => page,
+				driver: browserDriver(() => page),
 				policy: {
 					async choose() {
 						calls++;
@@ -685,7 +685,7 @@ test("a one-direction scroll sweep is not mistaken for oscillation", async () =>
 		const result = await runJev(
 			{ goal: "Read the bottom of the page", maxSteps: 6 },
 			{
-				page: () => page,
+				driver: browserDriver(() => page),
 				policy: {
 					async choose() {
 						calls++;
@@ -720,7 +720,7 @@ test("no observable progress over three different actions stops the run", async 
 		const result = await runJev(
 			{ goal: "Search", maxSteps: 10 },
 			{
-				page: () => page,
+				driver: browserDriver(() => page),
 				policy: {
 					async choose(data) {
 						observed.push(data);

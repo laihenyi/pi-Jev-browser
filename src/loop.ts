@@ -1,12 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Usage as ModelUsage } from "@earendil-works/pi-ai";
-import type { Page } from "playwright";
+import { type Driver, StaleObservationError } from "./driver.ts";
 import { failureCategory, describeError } from "./errors.ts";
-import {
-	isNavigationReadError,
-	observe,
-	StaleObservationError,
-} from "./observe.ts";
 import { type JevPolicy } from "./policy.ts";
 
 export interface RunInput {
@@ -94,7 +89,11 @@ export interface RunMemory {
 export async function runJev(
 	input: RunInput,
 	options: {
-		page: () => Page;
+		/**
+		 * The surface to drive. The loop knows nothing about how it is observed or
+		 * acted on, which is what lets the same loop drive a desktop later.
+		 */
+		driver: Driver;
 		signal?: AbortSignal;
 		onStep?: (step: RunStep) => Promise<void>;
 		policy: JevPolicy;
@@ -166,8 +165,8 @@ export async function runJev(
 			const step = executed + 1;
 			stage = "observation";
 			signal.throwIfAborted();
-			const page = options.page();
-			const snapshot = await observe(page, signal);
+			const surface = options.driver.id();
+			const snapshot = await options.driver.observe(signal);
 			lastPage = {
 				url: snapshot.data.url,
 				title: snapshot.data.title,
@@ -194,7 +193,8 @@ export async function runJev(
 				});
 				if (!["CLICK", "SELECT"].includes(decision.operation))
 					await snapshot.assertFresh();
-				if (page !== options.page())
+				// A driver that moved underneath the run must not be acted on.
+				if (surface !== options.driver.id())
 					throw new StaleObservationError("Active tab changed.");
 				if (decision.operation === "REVIEW")
 					return finish(
@@ -224,7 +224,7 @@ export async function runJev(
 					// Re-read after a short settle: a loading shell that already has page
 					// chrome can otherwise look like proof of completion.
 					await delay(DONE_SETTLE_MS, undefined, { signal });
-					const settled = await observe(options.page(), signal);
+					const settled = await options.driver.observe(signal);
 					let changed: boolean;
 					try {
 						changed =
@@ -300,7 +300,7 @@ export async function runJev(
 					}
 					text = generated.text;
 				}
-				if (page !== options.page())
+				if (surface !== options.driver.id())
 					throw new StaleObservationError("Active tab changed.");
 				signal.throwIfAborted();
 				const entry: RunStep = {
@@ -361,7 +361,7 @@ export async function runJev(
 					},
 				);
 				stage = "post_action_observation";
-				const after = await observe(options.page(), signal);
+				const after = await options.driver.observe(signal);
 				try {
 					const pageChanged =
 						JSON.stringify(after.data) !== JSON.stringify(snapshot.data);
@@ -451,14 +451,10 @@ export async function runJev(
 				? failureCategory(error)
 				: signal.aborted
 					? "cancelled"
-					: isNavigationReadError(error)
-						? "navigation_context"
-						: error instanceof Error && error.name === "TimeoutError"
+					: (options.driver.readFailureCategory?.(error) ??
+						(error instanceof Error && error.name === "TimeoutError"
 							? "timeout"
-							: error instanceof Error &&
-									/createTreeWalker|PI_JEV_BROWSER_DOCUMENT_NOT_READY/.test(error.message)
-								? "document_not_ready"
-								: "unexpected_error",
+							: "unexpected_error")),
 			detail: describeError(error),
 		};
 		// Provider errors may contain request bodies with page text. Tool output keeps

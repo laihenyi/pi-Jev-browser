@@ -192,6 +192,42 @@ This integration avoids an LLM reasoning round trip and a screenshot per browser
 step. Actual end-to-end speed and live-model reliability have not been
 benchmarked.
 
+### Where the loop ends and the surface begins
+
+The decision loop implements the part that turned out to be hard: bounded steps,
+stale-observation handling, an oscillation guard, a no-progress guard, traces,
+and handing control back to the human before a consequential action. None of that
+is web-specific, so `src/loop.ts` does not import Playwright. It drives a
+`Driver` (`src/driver.ts`):
+
+```ts
+interface Driver {
+  /** Identity of the surface; a change means the run moved and must not act. */
+  id(): unknown;
+  observe(signal?: AbortSignal): Promise<ObservationSnapshot>;
+  /** The driver's own vocabulary for read failures, e.g. a navigation context. */
+  readFailureCategory?(error: unknown): "navigation_context" | "document_not_ready" | undefined;
+}
+```
+
+`Observation` is the contract the decision layer reads: text plus addressable
+targets (`role`, `label`, `value`, `href`, and state), never pixels. A snapshot is
+bound to the state it was read from, so `assertFresh` and `execute` both refuse to
+act once that state has moved — which is what keeps an action from landing on
+whatever replaced the target in the meantime.
+
+The browser implementation is `browserDriver(getPage)` in `src/observe.ts`.
+Everything Playwright-specific lives there, including the error vocabulary: a
+destroyed execution context is a navigation in progress, and a document that never
+became readable is a browser condition, not a generic failure.
+
+`test/driver.test.ts` proves the boundary is real: it drives the loop with an
+in-memory driver that has no Playwright, no DOM and no browser, and still exercises
+`done_unverified`, `model_review`, `model_blocked`, `text_unavailable`,
+`repeated_action`, `no_progress`, `scroll_oscillation`, `stale_observations` and
+`step_limit`. Driving a different surface — a desktop through its accessibility
+tree, for example — means writing another driver, not rewriting the loop.
+
 ## Features
 
 - screenshots returned as image tool results, so the agent can verify outcomes

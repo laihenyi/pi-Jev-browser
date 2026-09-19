@@ -1,0 +1,250 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+	type Driver,
+	type Observation,
+	type ObservationSnapshot,
+	type ObservedTarget,
+} from "../src/driver.ts";
+import { runJev } from "../src/loop.ts";
+import { type JevPolicy } from "../src/policy.ts";
+
+/**
+ * These tests drive the decision loop with a driver that has no browser under it:
+ * no Playwright, no DOM, no page. If the loop passes them, its guards, its stop
+ * reasons and its traces are genuinely independent of the web, which is the
+ * precondition for reusing the loop for a different surface (a desktop, a terminal,
+ * a device) by writing another driver.
+ */
+
+interface FakeDriver {
+	driver: Driver;
+	executed: Array<{ operation: string; target?: ObservedTarget; text?: string }>;
+}
+
+function fakeDriver(options: {
+	observations: Observation[];
+	/** A normal surface advances when an action lands; an inert one does not. */
+	advanceOnExecute?: boolean;
+	/** A hijacked surface reports a new identity on every read. */
+	moveSurface?: boolean;
+}): FakeDriver {
+	const executed: FakeDriver["executed"] = [];
+	let index = 0;
+	let identity = 0;
+	const current = () =>
+		options.observations[Math.min(index, options.observations.length - 1)];
+	const snapshot = (): ObservationSnapshot => ({
+		data: current(),
+		async execute(operation: string, target?: ObservedTarget, text?: string) {
+			executed.push({ operation, target, text });
+			if (options.advanceOnExecute !== false) index++;
+		},
+		async assertFresh() {},
+		async dispose() {},
+	});
+	return {
+		executed,
+		driver: {
+			id: () => (options.moveSurface ? ++identity : "surface-1"),
+			observe: async () => snapshot(),
+		},
+	};
+}
+
+const target = (id: string, operation: ObservedTarget["operation"] = "CLICK"): ObservedTarget => ({
+	id,
+	operation,
+	label: id,
+	value: "",
+});
+
+const observation = (patch: Partial<Observation> = {}): Observation => ({
+	url: "surface://window-1",
+	title: "Fake surface",
+	text: "content",
+	targets: [],
+	scrollUp: true,
+	scrollDown: true,
+	...patch,
+});
+
+/** A policy that answers from a scripted list and never calls a model. */
+const scripted = (
+	decisions: Array<Partial<{ operation: string; target: ObservedTarget; probability: number }>>,
+	text: JevPolicy["text"] = async () => {
+		throw new Error("Unexpected text helper call");
+	},
+): JevPolicy => {
+	let call = 0;
+	return {
+		async choose() {
+			const decision = decisions[Math.min(call++, decisions.length - 1)];
+			return {
+				operation: decision.operation ?? "CLICK",
+				target: decision.target,
+				probability: decision.probability ?? 0.9,
+			} as never;
+		},
+		text,
+	};
+};
+
+test("a driver with no browser underneath can complete a run", async () => {
+	const fake = fakeDriver({
+		observations: [observation({ targets: [target("go")] }), observation({ text: "done" })],
+	});
+	const result = await runJev(
+		{ goal: "Reach the end" },
+		{ driver: fake.driver, policy: scripted([{ target: target("go") }, { operation: "DONE" }]) },
+	);
+	assert.equal(result.status, "done_unverified");
+	assert.equal(result.stopReason, "model_done");
+	assert.equal(result.steps.filter((step) => step.status === "executed").length, 1);
+	assert.equal(fake.executed.length, 1);
+	assert.equal(fake.executed[0].target?.id, "go");
+	// The run reports the freshest surface state, not the one it decided from.
+	assert.equal(result.page?.text, "done");
+});
+
+test("REVIEW and BLOCKED stop before the driver is asked to act", async () => {
+	const review = fakeDriver({ observations: [observation({ targets: [target("pay")] })] });
+	const reviewResult = await runJev(
+		{ goal: "Buy it" },
+		{ driver: review.driver, policy: scripted([{ operation: "REVIEW" }]) },
+	);
+	assert.equal(reviewResult.status, "needs_review");
+	assert.equal(reviewResult.stopReason, "model_review");
+	assert.equal(review.executed.length, 0);
+
+	const blocked = fakeDriver({ observations: [observation()] });
+	const blockedResult = await runJev(
+		{ goal: "Do the impossible" },
+		{ driver: blocked.driver, policy: scripted([{ operation: "BLOCKED" }]) },
+	);
+	assert.equal(blockedResult.status, "blocked");
+	assert.equal(blockedResult.stopReason, "model_blocked");
+	assert.equal(blocked.executed.length, 0);
+});
+
+test("a text helper that declines hands the field back instead of acting", async () => {
+	const fake = fakeDriver({ observations: [observation({ targets: [target("q", "TYPE_TEXT")] })] });
+	const result = await runJev(
+		{ goal: "Type something" },
+		{
+			driver: fake.driver,
+			policy: scripted([{ operation: "TYPE_TEXT", target: target("q", "TYPE_TEXT") }], async () => ({
+				text: null,
+			})),
+		},
+	);
+	assert.equal(result.status, "needs_review");
+	assert.equal(result.stopReason, "text_unavailable");
+	assert.equal(fake.executed.length, 0);
+});
+
+test("repeating one action on an inert surface stops as repeated_action", async () => {
+	const fake = fakeDriver({
+		observations: [observation({ targets: [target("toggle")] })],
+		advanceOnExecute: false,
+	});
+	const result = await runJev(
+		{ goal: "Advance", maxSteps: 10 },
+		{ driver: fake.driver, policy: scripted([{ target: target("toggle") }]) },
+	);
+	assert.equal(result.stopReason, "repeated_action");
+	assert.equal(fake.executed.length, 3);
+});
+
+test("three different actions with no surface change stop as no_progress", async () => {
+	const fake = fakeDriver({
+		observations: [observation({ targets: [target("a"), target("b"), target("c")] })],
+		advanceOnExecute: false,
+	});
+	let call = 0;
+	const policy: JevPolicy = {
+		async choose(data) {
+			return { operation: "CLICK", target: data.targets[call++] } as never;
+		},
+		async text() {
+			return { text: null };
+		},
+	};
+	const result = await runJev({ goal: "Advance", maxSteps: 10 }, { driver: fake.driver, policy });
+	assert.equal(result.stopReason, "no_progress");
+	assert.equal(fake.executed.length, 3);
+});
+
+test("alternating scrolls stop as scroll_oscillation on a driver that cannot scroll", async () => {
+	const fake = fakeDriver({
+		observations: [observation()],
+		advanceOnExecute: false,
+	});
+	let call = 0;
+	const policy: JevPolicy = {
+		async choose() {
+			return { operation: call++ % 2 === 0 ? "SCROLL_DOWN" : "SCROLL_UP" } as never;
+		},
+		async text() {
+			return { text: null };
+		},
+	};
+	const result = await runJev(
+		{ goal: "Find something that is not there", maxSteps: 12 },
+		{ driver: fake.driver, policy },
+	);
+	assert.equal(result.stopReason, "scroll_oscillation");
+	assert.equal(fake.executed.length, 5);
+});
+
+test("a driver whose surface keeps moving stops as stale_observations", async () => {
+	// This is the tab-hijack guard, generalised: the loop refuses to act on a
+	// surface that changed identity underneath the decision.
+	const fake = fakeDriver({ observations: [observation()], moveSurface: true });
+	const result = await runJev(
+		{ goal: "Act on whatever this is", maxSteps: 8 },
+		{ driver: fake.driver, policy: scripted([{ target: target("x") }]) },
+	);
+	assert.equal(result.status, "blocked");
+	assert.equal(result.stopReason, "stale_observations");
+	assert.equal(fake.executed.length, 0, "nothing may run on a surface that moved");
+});
+
+test("the step budget still bounds a driver that keeps changing", async () => {
+	const fake = fakeDriver({
+		observations: [
+			observation({ targets: [target("one")] }),
+			observation({ targets: [target("two")] }),
+			observation({ targets: [target("three")] }),
+		],
+	});
+	let call = 0;
+	const policy: JevPolicy = {
+		async choose(data) {
+			return { operation: "CLICK", target: data.targets[call % data.targets.length] } as never;
+		},
+		async text() {
+			return { text: null };
+		},
+	};
+	const result = await runJev({ goal: "Keep going", maxSteps: 3 }, { driver: fake.driver, policy });
+	assert.equal(result.stopReason, "step_limit");
+	assert.equal(fake.executed.length, 3);
+});
+
+test("driver read failures are classified by the driver, not by the loop", async () => {
+	const failing: Driver = {
+		id: () => "surface-1",
+		async observe() {
+			throw Object.assign(new Error("window closed mid-read"), { name: "DriverError" });
+		},
+		readFailureCategory: () => "navigation_context",
+	};
+	const result = await runJev(
+		{ goal: "Read a window that goes away" },
+		{ driver: failing, policy: scripted([{ operation: "DONE" }]) },
+	);
+	assert.equal(result.status, "interrupted");
+	assert.equal(result.failure?.category, "navigation_context");
+	assert.equal(result.failure?.stage, "observation");
+});
