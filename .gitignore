@@ -11,9 +11,9 @@ coverage/
 .env
 .env.*
 *.env
-pi-browser.config.json
-pi-browser.config.*.json
-!pi-browser.config.example.json
+pi-jev-browser.config.json
+pi-jev-browser.config.*.json
+!pi-jev-browser.config.example.json
 
 # Browser artifacts
 artifacts/
