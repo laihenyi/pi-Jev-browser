@@ -1,0 +1,37 @@
+# Dependencies and generated output
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+*.log
+.DS_Store
+
+# Local configuration and credentials (keep the safe example)
+.env
+.env.*
+*.env
+pi-browser.config.json
+pi-browser.config.*.json
+!pi-browser.config.example.json
+
+# Browser artifacts
+artifacts/
+test-results/
+playwright-report/
+playwright/.cache/
+screenshots/
+videos/
+*.webm
+*.jsonl
+
+# Benchmark output
+benchmarks/results/
+
+# Tooling indexes created by other pi extensions
+.zvec-grep/
+
+# Local browser profiles
+profiles/
+*.user-data/
+

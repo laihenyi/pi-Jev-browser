@@ -1,0 +1,31 @@
+{
+  "allowedOrigins": [
+    "http://*",
+    "https://*"
+  ],
+  "denyOrigins": [],
+  "requireConfirmation": [],
+  "headless": true,
+  "recordVideo": true,
+  "showCursor": true,
+  "showClickIndicators": true,
+  "popups": "stay",
+  "profile": "session",
+  "profileDir": "~/.pi/agent/pi-browser-profile",
+  "viewport": {
+    "width": 1280,
+    "height": 720
+  },
+  "stream": {
+    "enabled": false,
+    "intervalMs": 1000
+  },
+  "typesafe": {
+    "apiKey": "",
+    "baseUrl": "https://api.typesafe.ai",
+    "model": "jev-latest"
+  },
+  "textHelper": {
+    "model": ""
+  }
+}
