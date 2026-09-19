@@ -253,7 +253,7 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 					policy: {
 						async choose() {
 							throw configurationError(
-								"The browser_run Jev loop requires TYPESAFE_API_KEY.",
+								"The jev_run Jev loop requires TYPESAFE_API_KEY.",
 							);
 						},
 						async text() {
@@ -267,7 +267,7 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 			assert.match(configuration.message, /TYPESAFE_API_KEY/);
 			assert.equal(
 				configuration.failure?.detail,
-				"JevConfigurationError: The browser_run Jev loop requires TYPESAFE_API_KEY.",
+				"JevConfigurationError: The jev_run Jev loop requires TYPESAFE_API_KEY.",
 			);
 
 			const badTextOutput = await runJev(
@@ -422,7 +422,7 @@ test("a declined field value returns control instead of failing the run", async 
 		assert.equal(result.status, "needs_review");
 		assert.equal(result.stopReason, "text_unavailable");
 		assert.match(result.message, /declined/);
-		assert.match(result.message, /browser_actions/);
+		assert.match(result.message, /jev_actions/);
 		assert.equal(await page.locator("#query").inputValue(), "");
 		assert.equal(result.steps.length, 0);
 		assert.equal(result.failure, undefined);

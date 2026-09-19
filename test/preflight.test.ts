@@ -4,23 +4,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
 
-// config.ts resolves PI_BROWSER_CONFIG once at module load, so it has to be set
+// config.ts resolves PI_JEV_BROWSER_CONFIG once at module load, so it has to be set
 // before index.ts is imported. This file deliberately has no TypeSafe key.
-const directory = mkdtempSync(join(tmpdir(), "pi-browser-preflight-"));
+const directory = mkdtempSync(join(tmpdir(), "pi-jev-browser-preflight-"));
 const configPath = join(directory, "config.json");
 writeFileSync(
 	configPath,
 	JSON.stringify({ outputDir: directory, recordVideo: false }),
 );
-process.env.PI_BROWSER_CONFIG = configPath;
+process.env.PI_JEV_BROWSER_CONFIG = configPath;
 delete process.env.TYPESAFE_API_KEY;
-delete process.env.PI_BROWSER_TEXT_MODEL;
+delete process.env.PI_JEV_BROWSER_TEXT_MODEL;
 
 after(() => {
 	rmSync(directory, { recursive: true, force: true });
 });
 
-test("browser_run reports a missing Jev credential before starting Chromium", async () => {
+test("jev_run reports a missing Jev credential before starting Chromium", async () => {
 	const { default: register } = await import("../index.ts");
 	const tools: Array<{ name: string; execute: (...args: unknown[]) => unknown }> = [];
 	register({
@@ -29,8 +29,8 @@ test("browser_run reports a missing Jev credential before starting Chromium", as
 		},
 		on: () => undefined,
 	} as never);
-	const tool = tools.find((candidate) => candidate.name === "browser_run");
-	assert.ok(tool, "expected browser_run to be registered");
+	const tool = tools.find((candidate) => candidate.name === "jev_run");
+	assert.ok(tool, "expected jev_run to be registered");
 
 	const statuses: Array<string | undefined> = [];
 	let modelLookups = 0;

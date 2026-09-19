@@ -1,4 +1,4 @@
-# Pi Browser
+# Pi Jev Browser
 
 Isolated Playwright browser tools for **pi**, with **Jev** (TypeSafe System One)
 choosing each browser action over a structured DOM observation instead of a
@@ -11,17 +11,17 @@ the text helper changed. See [Differences from the Cline plugin](#differences-fr
 
 ## Install
 
-This directory is already a pi extension: `~/.pi/agent/extensions/pi-browser/`
+This directory is already a pi extension: `~/.pi/agent/extensions/pi-Jev-browser/`
 is auto-discovered, so restarting pi (or `/reload`) is enough. Dependencies are
 installed with:
 
 ```bash
-cd ~/.pi/agent/extensions/pi-browser
+cd ~/.pi/agent/extensions/pi-Jev-browser
 npm install
 node node_modules/playwright/cli.js install chromium   # or: npm run install-browser
 ```
 
-Chromium setup also happens automatically on the first `browser_run`, bounded to
+Chromium setup also happens automatically on the first `jev_run`, bounded to
 two minutes. A failed setup is reported by the tool that needed it, and a later
 call retries. On Linux, system browser libraries remain an administrator-managed
 prerequisite; the extension never runs sudo.
@@ -30,11 +30,11 @@ Provide a TypeSafe API key from `console.typesafe.ai` in the environment or the
 config file:
 
 ```bash
-export TYPESAFE_API_KEY=...        # or typesafe.apiKey in pi-browser.config.json
-chmod 600 ~/.pi/agent/pi-browser.config.json
+export TYPESAFE_API_KEY=...        # or typesafe.apiKey in pi-jev-browser.config.json
+chmod 600 ~/.pi/agent/pi-jev-browser.config.json
 ```
 
-`browser_run` resolves this before Chromium starts, so a missing key fails
+`jev_run` resolves this before Chromium starts, so a missing key fails
 immediately with the file and variable to set instead of a browser-shaped error.
 
 Nothing else is required: field text for typed inputs is generated with the pi
@@ -42,7 +42,7 @@ model the session is already using.
 
 ## The Jev loop
 
-`browser_run` starts or reuses a browser, captures a before screenshot, and then
+`jev_run` starts or reuses a browser, captures a before screenshot, and then
 runs a bounded decision loop. Each evaluation sends one TypeSafe System One
 request:
 
@@ -66,7 +66,7 @@ does not receive screenshots. The agent receives screenshots to verify outcomes.
 Jev chooses actions but cannot generate arbitrary text. When it chooses
 `TYPE_TEXT`, the extension calls the **active pi model** through
 `ctx.modelRegistry.complete()` to produce the field value. Set
-`textHelper.model` (or `PI_BROWSER_TEXT_MODEL`) to `"provider/modelId"` to pin a
+`textHelper.model` (or `PI_JEV_BROWSER_TEXT_MODEL`) to `"provider/modelId"` to pin a
 different model. Its token usage is reported back to pi on the tool result.
 
 The helper is a one-line extraction, so it uses a 4,096-token budget (reasoning
@@ -78,11 +78,11 @@ at most 2,000 characters, otherwise nothing is typed and the run reports
 
 ### Example tool sequence
 
-1. `browser_run({ "url": "https://en.wikipedia.org", "goal": "Find and open the article about Ada Lovelace. Stop when the article is visible.", "maxSteps": 20 })`
+1. `jev_run({ "url": "https://en.wikipedia.org", "goal": "Find and open the article about Ada Lovelace. Stop when the article is visible.", "maxSteps": 20 })`
 2. Verify the returned final screenshot (or read `finalScreenshotPath` if the image is not displayed).
-3. `browser_stop({})` to release the browser and finalize the video.
+3. `jev_stop({})` to release the browser and finalize the video.
 
-`browser_run` starts a browser automatically, captures the initial screen, runs
+`jev_run` starts a browser automatically, captures the initial screen, runs
 Jev, and returns a final image plus both screenshot paths and page states.
 Further calls reuse the browser; omit `url` to continue or provide it to navigate
 first. Launch options (`headless`, `recordVideo`, `showCursor`,
@@ -147,7 +147,7 @@ executed mutations are never retried.
 The loop retains observed DOM nodes and checks page semantics, node identity, and
 occlusion before acting. Frames, shadow DOM, canvas controls, nested scrolling,
 uploads, and arbitrary keyboard widgets are outside this DOM loop; use
-`browser_actions` where appropriate. Model context is capped at 200 action targets
+`jev_actions` where appropriate. Model context is capped at 200 action targets
 and 6,000 visible text characters, plus 50 selected options and up to 50 offscreen
 control labels in each direction. This can omit controls on dense pages.
 
@@ -187,9 +187,9 @@ This is a browser harness, not unrestricted control of the host desktop.
 
 ## Tools
 
-- `browser_run` — startup, before/after screenshots, and the Jev loop.
-- `browser_actions` — manual actions without Jev; returns an updated screenshot.
-- `browser_extract` — deterministic read of text, table rows, links, or an
+- `jev_run` — startup, before/after screenshots, and the Jev loop.
+- `jev_actions` — manual actions without Jev; returns an updated screenshot.
+- `jev_extract` — deterministic read of text, table rows, links, or an
   attribute, with no model call.
 
 ### Element targets instead of coordinates
@@ -216,7 +216,7 @@ link and act on the page it navigates to. A target that matches nothing fails wi
 A coordinate click is a raw event, so the browser will route it into an iframe even
 though the automatic loop never sees frame content. When a click or drag lands on a
 frame, the result carries a `warnings` entry and a matching `security` entry appears
-in `browser_logs`, naming the frame origin and flagging known anti-bot providers
+in `jev_logs`, naming the frame origin and flagging known anti-bot providers
 (`reCAPTCHA`, `hCaptcha`, `Cloudflare challenge`):
 
 ```
@@ -234,18 +234,18 @@ Sites open new tabs constantly (`target="_blank"` on login and outbound links). 
 Browser never switches the observed page silently:
 
 - `popups: "stay"` (default) keeps the run on the original page, records a `tab`
-  entry in `browser_logs`, and returns a warning naming the new URL.
+  entry in `jev_logs`, and returns a warning naming the new URL.
 - `popups: "follow"` adopts the new tab as the observed page, and says so.
-- `browser_actions` can then move deliberately with `activate_tab` / `close_tab`,
-  and `browser_state.activePageIndex` reports which tab is being observed.
+- `jev_actions` can then move deliberately with `activate_tab` / `close_tab`,
+  and `jev_state.activePageIndex` reports which tab is being observed.
 
 If the observed tab closes, the run falls back to another open tab instead of
 keeping a reference to a closed page.
 
-- `browser_logs` — captured console, error, request, navigation, tab, and security logs.
-- `browser_stream` — start, inspect, or stop the localhost live viewer.
-- `browser_state` — active state, tabs, URL, title, viewport, start time.
-- `browser_stop` — close the browser, stop the stream, finalize the video.
+- `jev_logs` — captured console, error, request, navigation, tab, and security logs.
+- `jev_stream` — start, inspect, or stop the localhost live viewer.
+- `jev_state` — active state, tabs, URL, title, viewport, start time.
+- `jev_stop` — close the browser, stop the stream, finalize the video.
 
 Every tool runs sequentially (`executionMode: "sequential"`) because they mutate
 one shared browser, and one browser operation at a time is allowed per pi session.
@@ -254,11 +254,11 @@ one shared browser, and one browser operation at a time is allowed per pi sessio
 
 No configuration is required. Defaults: all HTTP/HTTPS origins, headless
 Chromium, a 1280 × 720 viewport, WebM recording enabled, cursor and click
-indicators enabled, live viewer disabled until `browser_stream` starts it, and
-artifacts under `~/.pi/agent/pi-browser/`.
+indicators enabled, live viewer disabled until `jev_stream` starts it, and
+artifacts under `~/.pi/agent/pi-jev-browser/`.
 
-Copy `pi-browser.config.example.json` to `~/.pi/agent/pi-browser.config.json` to
-change defaults, or point `PI_BROWSER_CONFIG` at another file. Restrict
+Copy `pi-jev-browser.config.example.json` to `~/.pi/agent/pi-jev-browser.config.json` to
+change defaults, or point `PI_JEV_BROWSER_CONFIG` at another file. Restrict
 `allowedOrigins` with `*` wildcards (for example `https://*.example.com`) for
 authenticated or sensitive workflows.
 
@@ -283,7 +283,7 @@ authenticated or sensitive workflows.
 - `denyOrigins` is checked before `allowedOrigins`, so a deny rule always wins and
   blocks navigation before Chromium starts.
 - `requireConfirmation` lists origins that need an explicit yes in a pi dialog
-  before `browser_run` or `browser_actions` touches them. Without a dialog-capable
+  before `jev_run` or `jev_actions` touches them. Without a dialog-capable
   UI (for example a headless run) the call fails instead of proceeding silently.
 
 ### Persistent profile and human-in-the-loop login
@@ -291,7 +291,7 @@ authenticated or sensitive workflows.
 `profile` decides how much browser state survives between runs:
 
 - `"session"` (default) — one profile per pi session, under
-  `~/.pi/agent/pi-browser/profiles/<session id>`. Log in once in the visible
+  `~/.pi/agent/pi-jev-browser/profiles/<session id>`. Log in once in the visible
   window and later runs in the same pi session reuse the cookies. Two pi sessions
   never fight over one Chrome profile.
 - `"shared"` — one profile for every session, at `profileDir`. Convenient, but
@@ -303,10 +303,10 @@ design. Note that a persistent profile also keeps localStorage and IndexedDB, so
 point `profileDir` at something you are comfortable reusing.
 
 Environment overrides: `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`,
-`TYPESAFE_DEFAULT_MODEL`, `PI_BROWSER_TEXT_MODEL`, `PI_BROWSER_CONFIG`.
+`TYPESAFE_DEFAULT_MODEL`, `PI_JEV_BROWSER_TEXT_MODEL`, `PI_JEV_BROWSER_CONFIG`.
 Credentials are read on every run, are never passed to Chromium, and never appear
 in tool results. The config path is resolved once when pi starts, so restart pi
-after changing `PI_BROWSER_CONFIG`.
+after changing `PI_JEV_BROWSER_CONFIG`.
 
 ## Safety
 
@@ -331,12 +331,12 @@ npm run benchmark  # capability suite; see benchmarks/README.md
 
 Tests use local HTML, a local stub for the TypeSafe System One endpoint, and
 mocked pi models. They make no paid model calls. Browser tests require installed
-Chromium and permission to launch it; set `PI_BROWSER_TEST_BROWSER` to use a
+Chromium and permission to launch it; set `PI_JEV_BROWSER_TEST_BROWSER` to use a
 specific executable.
 
 ### Returned page evidence
 
-A `browser_run` result carries the page state captured when the loop stopped: the
+A `jev_run` result carries the page state captured when the loop stopped: the
 JSON summary (`status`, `stopReason`, `failure`, `steps`, `tracePath`,
 `errorsLogPath`, `finalPageUrl`, `finalPageTitle`), a readable block with the
 final URL, title and visible page text, and the before/after screenshots. The
@@ -347,7 +347,7 @@ every run also lands in the trace's final `result` entry.
 ### When a site blocks automated access
 
 Google and similar sites rate-limit repeated automated visits and serve an
-anti-bot verification page (`google.com/sorry/`). Pi Browser does not solve or
+anti-bot verification page (`google.com/sorry/`). Pi Jev Browser does not solve or
 bypass it: Jev returns `blocked` with `stopReason: "model_blocked"` on the first
 observation, typically in under a second, and the guidelines tell the agent to
 stop and ask you rather than retry.
@@ -356,7 +356,7 @@ Because a `blocked` or `needs_review` run leaves the browser open, you can clear
 the verification yourself:
 
 1. Keep `headless: false` so the window is visible.
-2. Let the run return `blocked` (the browser stays open; the agent must not call `browser_stop`).
+2. Let the run return `blocked` (the browser stays open; the agent must not call `jev_stop`).
 3. Solve the verification in the visible window.
 4. Continue **in the same pi session** — browsers are keyed to `ctx.sessionManager.getSessionId()`, so a new pi session starts a fresh browser.
 
@@ -370,7 +370,7 @@ exercise the full loop, including a real `TYPE_TEXT` through the pi model:
 
 ```bash
 # serve a fixture, then in pi:
-#   browser_run url http://127.0.0.1:4599/ goal "Search for zebra and open the
+#   jev_run url http://127.0.0.1:4599/ goal "Search for zebra and open the
 #   Zebra result. Stop when the page shows the Zebra heading."
 ```
 
@@ -378,7 +378,7 @@ exercise the full loop, including a real `TYPE_TEXT` through the pi model:
 
 pi transports a real `AbortSignal` to tool execution, so the extension combines
 that signal with its own per-session controller. Pressing Escape aborts an active
-run or action batch, and `browser_stop` cancels one explicitly. Run deadlines and
+run or action batch, and `jev_stop` cancels one explicitly. Run deadlines and
 model timeouts are still enforced locally. A browser mutation already in flight
 can finish before cancellation takes effect.
 
@@ -387,7 +387,7 @@ extension load, and `session_shutdown` closes any browser left open.
 
 ## Differences from the Cline plugin
 
-| Area | Cline plugin | Pi Browser |
+| Area | Cline plugin | Pi Jev Browser |
 | --- | --- | --- |
 | Host API | `plugin.setup(api)` with JSON Schema `inputSchema` | `export default (pi)` with TypeBox `parameters` |
 | Safety rules | `api.registerRule()` | `promptSnippet` + `promptGuidelines` (verified in the built system prompt) |
@@ -395,13 +395,13 @@ extension load, and `session_shutdown` closes any browser left open.
 | Decision model | `typesafe-ai/jev` via AI Gateway | `jev-latest` (configurable) direct |
 | Text helper | `google/gemini-2.5-flash-lite` via Gateway | active pi model via `ctx.modelRegistry.complete()` |
 | Credential | `AI_GATEWAY_API_KEY` | `TYPESAFE_API_KEY` |
-| Config | `~/.cline/plugins/cline-jev-browser.config.json` | `~/.pi/agent/pi-browser.config.json` |
-| Artifacts | `~/.cline/data/jev-browser/` | `~/.pi/agent/pi-browser/` |
+| Config | `~/.cline/plugins/cline-jev-browser.config.json` | `~/.pi/agent/pi-jev-browser.config.json` |
+| Artifacts | `~/.cline/data/jev-browser/` | `~/.pi/agent/pi-jev-browser/` |
 | Session identity | `context.sessionId` over JSON IPC | `ctx.sessionManager.getSessionId()` |
 | Cancellation | local controller only (signals were not transported) | pi `AbortSignal` + local controller |
 | Failure reporting | one opaque `interrupted` message | classified `failure` + `errors.log` with the full provider error |
 | Setup | kicked off eagerly when the plugin loaded | lazily on first browser tool use |
-| Tool names | `jev_run`, `jev_actions`, `jev_state`, `jev_logs`, `jev_stream`, `jev_stop` | `browser_run`, `browser_actions`, `browser_state`, `browser_logs`, `browser_stream`, `browser_stop` |
+| Tool names | `jev_run`, `jev_actions`, `jev_state`, `jev_logs`, `jev_stream`, `jev_stop` | the same names, plus `jev_extract` for deterministic reads |
 | Tool results | `{ result: [...] }` interpreted by Cline | `{ content, details, usage }`; nested model usage is reported to pi |
 | Schemas | JSON Schema with `additionalProperties: false` | TypeBox with `additionalProperties: false`, plus per-action field validation |
 | Concurrency | host-defined | `executionMode: "sequential"` for all browser tools |

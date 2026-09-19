@@ -294,7 +294,7 @@ export async function runJev(
 						});
 						return finish(
 							"needs_review",
-							`The text helper declined to produce a value for the field ${JSON.stringify(decision.target.label)}. Supply the value with browser_actions or clarify the goal, then run again.`,
+							`The text helper declined to produce a value for the field ${JSON.stringify(decision.target.label)}. Supply the value with jev_actions or clarify the goal, then run again.`,
 							"text_unavailable",
 						);
 					}
@@ -343,7 +343,7 @@ export async function runJev(
 					// identical actions keep "succeeding" while the goal never advances.
 					return finish(
 						"blocked",
-						`${decision.operation} on ${JSON.stringify(decision.target?.label ?? actionKey)} executed ${repeatedActions} times without advancing the goal. The control likely toggles or needs manual handling; continue with browser_actions.`,
+						`${decision.operation} on ${JSON.stringify(decision.target?.label ?? actionKey)} executed ${repeatedActions} times without advancing the goal. The control likely toggles or needs manual handling; continue with jev_actions.`,
 						"repeated_action",
 					);
 				}
@@ -399,7 +399,7 @@ export async function runJev(
 					if (scrollReversals >= MAX_SCROLL_REVERSALS)
 						return finish(
 							"blocked",
-							`Scroll direction alternated ${scrollReversals} times, so the loop is oscillating rather than exploring. Continue with browser_actions or revise the goal.`,
+							`Scroll direction alternated ${scrollReversals} times, so the loop is oscillating rather than exploring. Continue with jev_actions or revise the goal.`,
 							"scroll_oscillation",
 						);
 				} finally {
@@ -422,7 +422,7 @@ export async function runJev(
 				if (consecutiveStale >= 4)
 					return finish(
 						"blocked",
-						`Four consecutive observations were invalidated before an action could run, so the page changed on every attempt. Continue with browser_actions; this widget is outside the automatic DOM loop.`,
+						`Four consecutive observations were invalidated before an action could run, so the page changed on every attempt. Continue with jev_actions; this widget is outside the automatic DOM loop.`,
 						"stale_observations",
 					);
 			} finally {
@@ -456,7 +456,7 @@ export async function runJev(
 						: error instanceof Error && error.name === "TimeoutError"
 							? "timeout"
 							: error instanceof Error &&
-									/createTreeWalker|PI_BROWSER_DOCUMENT_NOT_READY/.test(error.message)
+									/createTreeWalker|PI_JEV_BROWSER_DOCUMENT_NOT_READY/.test(error.message)
 								? "document_not_ready"
 								: "unexpected_error",
 			detail: describeError(error),

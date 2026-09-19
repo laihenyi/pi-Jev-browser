@@ -46,7 +46,7 @@ export function parseActions(input: unknown): BrowserAction[] {
 		throw new Error("actions must contain at least one browser action.");
 	}
 	if (input.length > 50) {
-		throw new Error("A single browser_actions call is limited to 50 actions.");
+		throw new Error("A single jev_actions call is limited to 50 actions.");
 	}
 	return input.map((action, index) => parseAction(action, index));
 }

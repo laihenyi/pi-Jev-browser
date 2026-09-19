@@ -11,7 +11,7 @@
   "showClickIndicators": true,
   "popups": "stay",
   "profile": "session",
-  "profileDir": "~/.pi/agent/pi-browser-profile",
+  "profileDir": "~/.pi/agent/pi-jev-browser-profile",
   "viewport": {
     "width": 1280,
     "height": 720

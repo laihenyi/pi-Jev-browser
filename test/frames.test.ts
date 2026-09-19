@@ -8,8 +8,8 @@ import { executeActions } from "../src/actions.ts";
 import { detectFrameProvider, frameAtPoint, frameWarning } from "../src/frames.ts";
 import { launchTestBrowser } from "./helpers.ts";
 
-// The runtime resolves PI_BROWSER_CONFIG at import time.
-const directory = mkdtempSync(join(tmpdir(), "pi-browser-frames-"));
+// The runtime resolves PI_JEV_BROWSER_CONFIG at import time.
+const directory = mkdtempSync(join(tmpdir(), "pi-jev-browser-frames-"));
 const configPath = join(directory, "config.json");
 writeFileSync(
 	configPath,
@@ -20,7 +20,7 @@ writeFileSync(
 		allowedOrigins: ["http://127.0.0.1:*"],
 	}),
 );
-process.env.PI_BROWSER_CONFIG = configPath;
+process.env.PI_JEV_BROWSER_CONFIG = configPath;
 after(() => rmSync(directory, { recursive: true, force: true }));
 
 const FRAME_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Frame page</title></head>
@@ -126,7 +126,7 @@ test("coordinate clicks over a frame are reported, main-frame clicks are not", a
 	}
 });
 
-test("browser_actions surfaces frame warnings and logs them", async () => {
+test("jev_actions surfaces frame warnings and logs them", async () => {
 	const server = await startServer();
 	const { PiBrowserManager } = await import("../src/runtime.ts");
 	const manager = new PiBrowserManager();

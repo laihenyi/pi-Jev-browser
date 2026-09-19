@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
 
-// config.ts resolves PI_BROWSER_CONFIG once at module load, so the path has to
+// config.ts resolves PI_JEV_BROWSER_CONFIG once at module load, so the path has to
 // exist before the runtime is imported by the first test in this file.
-const directory = mkdtempSync(join(tmpdir(), "pi-browser-runtime-"));
+const directory = mkdtempSync(join(tmpdir(), "pi-jev-browser-runtime-"));
 const configPath = join(directory, "config.json");
 writeFileSync(
 	configPath,
@@ -17,7 +17,7 @@ writeFileSync(
 		allowedOrigins: ["http://127.0.0.1:*"],
 	}),
 );
-process.env.PI_BROWSER_CONFIG = configPath;
+process.env.PI_JEV_BROWSER_CONFIG = configPath;
 
 after(() => {
 	rmSync(directory, { recursive: true, force: true });
@@ -217,7 +217,7 @@ test("manager refuses navigation outside allowedOrigins", async () => {
 				host,
 				unusedPolicy,
 			),
-			/blocked by pi-browser.config.json/,
+			/blocked by pi-jev-browser.config.json/,
 		);
 		assert.equal((await manager.state(host)).active, false);
 	} finally {

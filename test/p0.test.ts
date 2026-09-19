@@ -8,11 +8,11 @@ import { executeActions } from "../src/actions.ts";
 import { extractFromPage } from "../src/extract.ts";
 import { launchTestBrowser } from "./helpers.ts";
 
-// The runtime resolves PI_BROWSER_CONFIG at import time, but the file itself is
+// The runtime resolves PI_JEV_BROWSER_CONFIG at import time, but the file itself is
 // read on every call, so tests can rewrite it to switch policy.
-const directory = mkdtempSync(join(tmpdir(), "pi-browser-p0-"));
+const directory = mkdtempSync(join(tmpdir(), "pi-jev-browser-p0-"));
 const configPath = join(directory, "config.json");
-process.env.PI_BROWSER_CONFIG = configPath;
+process.env.PI_JEV_BROWSER_CONFIG = configPath;
 const writeConfig = (patch: Record<string, unknown>) =>
 	writeFileSync(
 		configPath,
@@ -320,7 +320,7 @@ test("a session profile keeps cookies between browser starts", async () => {
 		}).requireSession(host);
 		await first.context.addCookies([
 			{
-				name: "pi-browser-test",
+				name: "pi-jev-browser-test",
 				value: "kept",
 				url: server.url,
 				// Without an expiry this is a session cookie, which Chromium drops on
@@ -339,7 +339,7 @@ test("a session profile keeps cookies between browser starts", async () => {
 		const cookies = await second.context.cookies(server.url);
 		assert.ok(
 			cookies.some(
-				(cookie) => cookie.name === "pi-browser-test" && cookie.value === "kept",
+				(cookie) => cookie.name === "pi-jev-browser-test" && cookie.value === "kept",
 			),
 			"a cookie set in the first run must survive a restart of the same session",
 		);

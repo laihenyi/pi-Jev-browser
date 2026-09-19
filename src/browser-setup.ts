@@ -19,7 +19,7 @@ async function installChromium(): Promise<void> {
 	} catch {
 		// Installer output can contain proxy credentials; do not expose it to tools.
 		throw new Error(
-			"Automatic Chromium setup failed or timed out. Check network/proxy access and browser-cache permissions, then retry browser_run. On Linux, required system libraries must also be installed by the system administrator.",
+			"Automatic Chromium setup failed or timed out. Check network/proxy access and browser-cache permissions, then retry jev_run. On Linux, required system libraries must also be installed by the system administrator.",
 		);
 	}
 }
@@ -43,7 +43,7 @@ export function resolvePlaywrightCli(): string {
 	const found = candidates.find((candidate) => existsSync(candidate));
 	if (!found)
 		throw new Error(
-			"Playwright is not installed next to the pi-browser extension. Run `npm install` in the extension directory.",
+			"Playwright is not installed next to the pi-jev-browser extension. Run `npm install` in the extension directory.",
 		);
 	return found;
 }

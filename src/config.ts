@@ -8,8 +8,8 @@ import type { PiBrowserConfig } from "./types.ts";
 export const AGENT_DIR = join(homedir(), ".pi", "agent");
 
 export const CONFIG_PATH =
-	process.env.PI_BROWSER_CONFIG?.trim() ||
-	join(AGENT_DIR, "pi-browser.config.json");
+	process.env.PI_JEV_BROWSER_CONFIG?.trim() ||
+	join(AGENT_DIR, "pi-jev-browser.config.json");
 
 const DEFAULT_CONFIG: PiBrowserConfig = {
 	allowedOrigins: ["http://*", "https://*"],
@@ -19,12 +19,12 @@ const DEFAULT_CONFIG: PiBrowserConfig = {
 	recordVideo: true,
 	showCursor: true,
 	showClickIndicators: true,
-	outputDir: join(AGENT_DIR, "pi-browser"),
+	outputDir: join(AGENT_DIR, "pi-jev-browser"),
 	viewport: { width: 1280, height: 720 },
 	stream: { enabled: false, intervalMs: 1000 },
 	popups: "stay",
 	profile: "session",
-	profileDir: join(AGENT_DIR, "pi-browser-profile"),
+	profileDir: join(AGENT_DIR, "pi-jev-browser-profile"),
 };
 
 export function readConfigFile(path = CONFIG_PATH): Record<string, unknown> {

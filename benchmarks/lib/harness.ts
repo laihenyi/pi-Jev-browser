@@ -57,7 +57,7 @@ export interface ScenarioResult {
 }
 
 /**
- * The runtime reads PI_BROWSER_CONFIG once, but re-reads the file on every call,
+ * The runtime reads PI_JEV_BROWSER_CONFIG once, but re-reads the file on every call,
  * so one benchmark-owned file can hold per-scenario settings. env.ts sets that
  * path before config.ts is imported.
  */
@@ -65,7 +65,7 @@ export interface ScenarioResult {
 /** Model settings come from the user's normal config; the benchmark only overrides browser policy. */
 function modelSettings() {
 	try {
-		const raw = readConfigFile(join(AGENT_DIR, "pi-browser.config.json"));
+		const raw = readConfigFile(join(AGENT_DIR, "pi-jev-browser.config.json"));
 		return {
 			typesafe: raw.typesafe as Record<string, unknown> | undefined,
 			textHelper: raw.textHelper as Record<string, unknown> | undefined,
@@ -105,7 +105,7 @@ export async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
 	const effective = readConfig();
 	if (effective.outputDir !== outputDir)
 		throw new Error(
-			`Benchmark config was ignored: runtime read outputDir ${effective.outputDir}. Check PI_BROWSER_CONFIG handling.`,
+			`Benchmark config was ignored: runtime read outputDir ${effective.outputDir}. Check PI_JEV_BROWSER_CONFIG handling.`,
 		);
 	const context: ScenarioContext = {
 		fixtures,

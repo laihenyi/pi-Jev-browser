@@ -30,7 +30,7 @@ block the runner through no fault of the code.
 | `model` | a TypeSafe credential | Real Jev decisions, but against local pages only, so the results are reproducible and no third party is touched. |
 | `live` | credential + internet | Real sites. These are the numbers that matter, and also the ones that can break for reasons outside the code. |
 
-The `model` tier reads the credential from `~/.pi/agent/pi-browser.config.json` or
+The `model` tier reads the credential from `~/.pi/agent/pi-jev-browser.config.json` or
 `TYPESAFE_API_KEY`, the same way the extension does. The benchmark overrides only
 browser policy, and fails loudly if the runtime is still reading a different
 config file.
@@ -42,7 +42,7 @@ config file.
 | Scenario | Category | Asserts |
 | --- | --- | --- |
 | `manual-selectors` | regression | `fill` / `select` / `click` by role and accessible name, with the form submission confirmed by the fixture server. |
-| `manual-extract` | capability | `browser_extract` returns exact text, table rows, links and attributes. |
+| `manual-extract` | capability | `jev_extract` returns exact text, table rows, links and attributes. |
 | `manual-frame-audit` | regression | A coordinate click that lands in an iframe is reported **and** really reaches the frame; a click elsewhere is not reported. |
 | `manual-popup-stay` | regression | A `target="_blank"` link is reported, never becomes the observed page, and `activate_tab` moves tabs on request. |
 | `manual-deny-origin` | regression | `denyOrigins` refuses navigation before Chromium starts. |

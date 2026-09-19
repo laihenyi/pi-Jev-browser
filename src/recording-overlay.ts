@@ -7,8 +7,8 @@ export async function installRecordingOverlay(
 	if (!options.showCursor && !options.showClickIndicators) return;
 
 	await context.addInitScript(({ showCursor, showClickIndicators }) => {
-		const cursorId = "__pi-browser-cursor";
-		const markerAttribute = "data-pi-browser-overlay";
+		const cursorId = "__pi-jev-browser-cursor";
+		const markerAttribute = "data-pi-jev-browser-overlay";
 		let cursor: HTMLDivElement | null = null;
 
 		const applyBaseStyle = (element: HTMLElement) => {

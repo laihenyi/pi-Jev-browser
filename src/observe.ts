@@ -63,7 +63,7 @@ export async function observe(page: Page, signal?: AbortSignal) {
 				(!isNavigationReadError(error) &&
 					!(
 						error instanceof Error &&
-						error.message.includes("PI_BROWSER_DOCUMENT_NOT_READY")
+						error.message.includes("PI_JEV_BROWSER_DOCUMENT_NOT_READY")
 					)) ||
 				attempt >= 4
 			)
@@ -104,7 +104,7 @@ async function observeDocument(page: Page) {
 
 		const read = () => {
 			if (!document.body || document.readyState === "loading")
-				throw new Error("PI_BROWSER_DOCUMENT_NOT_READY");
+				throw new Error("PI_JEV_BROWSER_DOCUMENT_NOT_READY");
 			const nodes: HTMLElement[] = [];
 			const targets: ObservedTarget[] = [];
 			const offscreenControls = {

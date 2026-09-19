@@ -34,18 +34,18 @@ function toolNamed(tools: RegisteredTool[], name: string) {
 	return tool;
 }
 
-test("registers the complete Pi Browser tool surface", () => {
+test("registers the complete Pi Jev Browser tool surface", () => {
 	const { tools, events } = loadExtension();
 	assert.deepEqual(
 		tools.map((tool) => tool.name),
 		[
-			"browser_run",
-			"browser_actions",
-			"browser_extract",
-			"browser_state",
-			"browser_logs",
-			"browser_stream",
-			"browser_stop",
+			"jev_run",
+			"jev_actions",
+			"jev_extract",
+			"jev_state",
+			"jev_logs",
+			"jev_stream",
+			"jev_stop",
 		],
 	);
 	for (const tool of tools) {
@@ -58,35 +58,35 @@ test("registers the complete Pi Browser tool surface", () => {
 	assert.deepEqual(events, ["session_shutdown"]);
 });
 
-test("browser_run guidelines carry the safety contract and name their tools", () => {
+test("jev_run guidelines carry the safety contract and name their tools", () => {
 	const { tools } = loadExtension();
-	const guidelines = toolNamed(tools, "browser_run").promptGuidelines ?? [];
+	const guidelines = toolNamed(tools, "jev_run").promptGuidelines ?? [];
 	const joined = guidelines.join("\n");
 	assert.match(joined, /untrusted third-party content/);
 	assert.match(joined, /prompt injection/);
 	assert.match(joined, /explicit approval for that exact transmission/);
 	assert.match(joined, /done_unverified/);
 	assert.match(joined, /tracePath/);
-	assert.match(joined, /browser_actions/);
-	assert.match(joined, /browser_run/);
+	assert.match(joined, /jev_actions/);
+	assert.match(joined, /jev_run/);
 	for (const guideline of guidelines)
 		assert.doesNotMatch(guideline, /\bthis tool\b/i);
 	const actionGuidelines =
-		toolNamed(tools, "browser_actions").promptGuidelines ?? [];
-	assert.ok(actionGuidelines.some((line) => line.includes("browser_run")));
+		toolNamed(tools, "jev_actions").promptGuidelines ?? [];
+	assert.ok(actionGuidelines.some((line) => line.includes("jev_run")));
 	assert.equal(
 		guidelines.filter((line) => line.includes("untrusted third-party content"))
 			.length,
 		1,
 		"shared safety text is attached once so the system prompt does not duplicate it",
 	);
-	const stopGuidelines = toolNamed(tools, "browser_stop").promptGuidelines ?? [];
-	assert.ok(stopGuidelines.some((line) => line.includes("browser_stop")));
+	const stopGuidelines = toolNamed(tools, "jev_stop").promptGuidelines ?? [];
+	assert.ok(stopGuidelines.some((line) => line.includes("jev_stop")));
 });
 
-test("browser_run parameters enforce the documented bounds", () => {
+test("jev_run parameters enforce the documented bounds", () => {
 	const { tools } = loadExtension();
-	const schema = toolNamed(tools, "browser_run").parameters;
+	const schema = toolNamed(tools, "jev_run").parameters;
 	assert.equal(Value.Check(schema, { goal: "Find cats" }), true);
 	assert.equal(
 		Value.Check(schema, { goal: "Find cats", url: "https://example.test" }),
@@ -104,9 +104,9 @@ test("browser_run parameters enforce the documented bounds", () => {
 	assert.equal(Value.Check(schema, { goal: "cats", extra: 1 }), false);
 });
 
-test("browser_actions parameters accept the flat action schema", () => {
+test("jev_actions parameters accept the flat action schema", () => {
 	const { tools } = loadExtension();
-	const schema = toolNamed(tools, "browser_actions").parameters;
+	const schema = toolNamed(tools, "jev_actions").parameters;
 	assert.equal(
 		Value.Check(schema, {
 			actions: [
@@ -129,42 +129,42 @@ test("browser_actions parameters accept the flat action schema", () => {
 	assert.equal(Value.Check(schema, { actions: [{ type: "wait", ms: 60000 }] }), false);
 });
 
-test("browser_stream and browser_logs parameters stay bounded", () => {
+test("jev_stream and jev_logs parameters stay bounded", () => {
 	const { tools } = loadExtension();
 	assert.equal(
-		Value.Check(toolNamed(tools, "browser_stream").parameters, {
+		Value.Check(toolNamed(tools, "jev_stream").parameters, {
 			action: "start",
 			intervalMs: 250,
 		}),
 		true,
 	);
 	assert.equal(
-		Value.Check(toolNamed(tools, "browser_stream").parameters, { action: "watch" }),
+		Value.Check(toolNamed(tools, "jev_stream").parameters, { action: "watch" }),
 		false,
 	);
 	assert.equal(
-		Value.Check(toolNamed(tools, "browser_stream").parameters, {
+		Value.Check(toolNamed(tools, "jev_stream").parameters, {
 			action: "start",
 			intervalMs: 100,
 		}),
 		false,
 	);
 	assert.equal(
-		Value.Check(toolNamed(tools, "browser_logs").parameters, {
+		Value.Check(toolNamed(tools, "jev_logs").parameters, {
 			afterId: 0,
 			limit: 1000,
 		}),
 		true,
 	);
 	assert.equal(
-		Value.Check(toolNamed(tools, "browser_logs").parameters, { limit: 1001 }),
+		Value.Check(toolNamed(tools, "jev_logs").parameters, { limit: 1001 }),
 		false,
 	);
 });
 
-test("browser_state and browser_stop accept only an empty object", () => {
+test("jev_state and jev_stop accept only an empty object", () => {
 	const { tools } = loadExtension();
-	for (const name of ["browser_state", "browser_stop"]) {
+	for (const name of ["jev_state", "jev_stop"]) {
 		const schema = toolNamed(tools, name).parameters;
 		assert.equal(Value.Check(schema, {}), true);
 		assert.equal(Value.Check(schema, { unexpected: true }), false);

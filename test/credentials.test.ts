@@ -9,7 +9,7 @@ import {
 } from "../src/credentials.ts";
 
 test("credential file handles JSON syntax, precedence, reloads and missing keys", () => {
-	const directory = mkdtempSync(join(tmpdir(), "pi-browser-credentials-"));
+	const directory = mkdtempSync(join(tmpdir(), "pi-jev-browser-credentials-"));
 	const path = join(directory, "config.json");
 	try {
 		assert.throws(() => readJevCredentials({ path, env: {} }), /TYPESAFE_API_KEY/);
@@ -51,7 +51,7 @@ test("credential file handles JSON syntax, precedence, reloads and missing keys"
 			"file-test-key",
 		);
 		assert.equal(
-			readTextHelperModel({ path, env: { PI_BROWSER_TEXT_MODEL: "openai/gpt-5" } }),
+			readTextHelperModel({ path, env: { PI_JEV_BROWSER_TEXT_MODEL: "openai/gpt-5" } }),
 			"openai/gpt-5",
 		);
 		writeFileSync(

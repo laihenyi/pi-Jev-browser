@@ -130,7 +130,7 @@ export class PiBrowserManager {
 			({ context: browserContext, browser } = await start(false));
 			actualHeadless = false;
 			launchWarning =
-				"Headless Chromium was unavailable in this process, so Pi Browser started a visible browser window.";
+				"Headless Chromium was unavailable in this process, so Pi Jev Browser started a visible browser window.";
 		}
 		await installRecordingOverlay(browserContext, {
 			showCursor: input.showCursor ?? config.showCursor,
@@ -488,7 +488,7 @@ export class PiBrowserManager {
 		const session = this.sessions.get(key);
 		if (!session)
 			throw new Error(
-				"No browser is active. Call browser_run with a goal and initial URL first.",
+				"No browser is active. Call jev_run with a goal and initial URL first.",
 			);
 		// Rebind on every call: a session outlives the call that created it, and
 		// progress events must reach the current caller, not the first one.
@@ -597,7 +597,7 @@ export class PiBrowserManager {
 			if (follow) session.page = page;
 			const notice = follow
 				? `A new tab opened at ${page.url()} and is now the observed page.`
-				: `A new tab opened at ${page.url()}. Pi Browser kept observing ${session.page.url()}; use browser_actions activate_tab or close_tab to switch tabs.`;
+				: `A new tab opened at ${page.url()}. Pi Jev Browser kept observing ${session.page.url()}; use jev_actions activate_tab or close_tab to switch tabs.`;
 			session.notices.push(notice);
 			this.addLog(session, {
 				type: "tab",
@@ -613,7 +613,7 @@ export class PiBrowserManager {
 					.find((candidate) => !candidate.isClosed());
 				if (!fallback) return;
 				session.page = fallback;
-				const message = `The observed tab closed, so Pi Browser switched to ${fallback.url()}.`;
+				const message = `The observed tab closed, so Pi Jev Browser switched to ${fallback.url()}.`;
 				session.notices.push(message);
 				this.addLog(session, {
 					type: "tab",
@@ -680,11 +680,11 @@ function screenshotResult(
 function assertUrlAllowed(url: string, config: PiBrowserConfig) {
 	if (isUrlAllowed(url, config.denyOrigins)) {
 		throw new Error(
-			`Navigation blocked by denyOrigins in pi-browser.config.json: ${url}`,
+			`Navigation blocked by denyOrigins in pi-jev-browser.config.json: ${url}`,
 		);
 	}
 	if (!isUrlAllowed(url, config.allowedOrigins)) {
-		throw new Error(`Navigation blocked by pi-browser.config.json: ${url}`);
+		throw new Error(`Navigation blocked by pi-jev-browser.config.json: ${url}`);
 	}
 }
 

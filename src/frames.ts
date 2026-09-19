@@ -71,7 +71,7 @@ export function detectFrameProvider(src: string): string | undefined {
 	return PROVIDERS.find((provider) => provider.test(url))?.name;
 }
 
-/** Human-readable warning recorded on the tool result and in browser_logs. */
+/** Human-readable warning recorded on the tool result and in jev_logs. */
 export function frameWarning(
 	action: string,
 	x: number,

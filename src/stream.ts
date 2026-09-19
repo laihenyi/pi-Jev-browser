@@ -120,7 +120,7 @@ export async function startStream(
 function viewerHtml(token: string) {
 	return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>Pi Browser</title><style>
+<title>Pi Jev Browser</title><style>
 html,body{margin:0;background:#09090b;color:#e4e4e7;font:14px system-ui;height:100%}main{display:grid;grid-template-rows:auto 1fr auto;height:100%}
 header{padding:10px 14px;border-bottom:1px solid #27272a;display:flex;gap:12px}#url{color:#a1a1aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #screen{width:100%;height:100%;object-fit:contain;min-height:0}pre{height:120px;overflow:auto;margin:0;padding:10px 14px;border-top:1px solid #27272a;color:#a1a1aa;font:12px ui-monospace}

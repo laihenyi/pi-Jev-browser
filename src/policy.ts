@@ -335,7 +335,7 @@ function resolveTextModel(
 	}
 	if (!ctx.model)
 		throw new Error(
-			"No active pi model is available for the Jev text helper. Select a model or set textHelper.model in pi-browser.config.json.",
+			"No active pi model is available for the Jev text helper. Select a model or set textHelper.model in pi-jev-browser.config.json.",
 		);
 	if (!ctx.modelRegistry.hasConfiguredAuth(ctx.model))
 		throw new Error(

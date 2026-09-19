@@ -1,5 +1,5 @@
 {
-  "name": "pi-browser",
+  "name": "pi-jev-browser",
   "version": "0.1.0",
   "description": "Browser automation tools for pi: Jev (TypeSafe System One) chooses each action in a bounded DOM loop, with a deterministic selector layer for precise work.",
   "license": "Apache-2.0",
@@ -7,7 +7,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/laihenyi/pi-browser.git"
+    "url": "git+https://github.com/laihenyi/pi-Jev-browser.git"
   },
   "keywords": [
     "pi-extension",

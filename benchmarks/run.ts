@@ -71,7 +71,7 @@ if (selected.length === 0) {
 const credentials = hasCredentials();
 if (selected.some((scenario) => scenario.tier !== "local") && !credentials) {
 	console.error(
-		"Model and live scenarios need a TypeSafe credential (TYPESAFE_API_KEY or typesafe.apiKey in pi-browser.config.json).",
+		"Model and live scenarios need a TypeSafe credential (TYPESAFE_API_KEY or typesafe.apiKey in pi-jev-browser.config.json).",
 	);
 }
 

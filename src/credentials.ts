@@ -29,7 +29,7 @@ export function readJevCredentials(
 	const apiKey = value(env.TYPESAFE_API_KEY) || value(typesafe?.apiKey);
 	if (!apiKey)
 		throw configurationError(
-			`The browser_run Jev loop requires TYPESAFE_API_KEY in the pi process environment or typesafe.apiKey in ${path}.`,
+			`The jev_run Jev loop requires TYPESAFE_API_KEY in the pi process environment or typesafe.apiKey in ${path}.`,
 		);
 
 	return {
@@ -53,5 +53,5 @@ export function readTextHelperModel(
 	const textHelper = raw.textHelper as { model?: unknown } | undefined;
 	const value = (input: unknown) =>
 		typeof input === "string" ? input.trim() : "";
-	return value(env.PI_BROWSER_TEXT_MODEL) || value(textHelper?.model) || undefined;
+	return value(env.PI_JEV_BROWSER_TEXT_MODEL) || value(textHelper?.model) || undefined;
 }

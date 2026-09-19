@@ -14,7 +14,7 @@ test("matches configured origins and blocks unsupported schemes", () => {
 });
 
 test("loads bounded config values", () => {
-	const directory = mkdtempSync(join(tmpdir(), "pi-browser-config-"));
+	const directory = mkdtempSync(join(tmpdir(), "pi-jev-browser-config-"));
 	const path = join(directory, "config.json");
 	try {
 		writeFileSync(
@@ -36,7 +36,7 @@ test("loads bounded config values", () => {
 
 test("uses complete defaults when configuration is omitted", () => {
 	const config = readConfig(
-		join(tmpdir(), "missing-pi-browser.config.json"),
+		join(tmpdir(), "missing-pi-jev-browser.config.json"),
 	);
 	assert.deepEqual(config.allowedOrigins, ["http://*", "https://*"]);
 	assert.equal(config.headless, true);
@@ -63,7 +63,7 @@ test("uses complete defaults when configuration is omitted", () => {
 
 test("reports unreadable or malformed configuration instead of silently defaulting", () => {
 	assert.throws(() => readConfig(tmpdir()), /Cannot read/);
-	const directory = mkdtempSync(join(tmpdir(), "pi-browser-config-bad-"));
+	const directory = mkdtempSync(join(tmpdir(), "pi-jev-browser-config-bad-"));
 	const path = join(directory, "config.json");
 	try {
 		writeFileSync(path, "{invalid");

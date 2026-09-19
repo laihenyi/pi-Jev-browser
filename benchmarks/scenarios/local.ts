@@ -76,7 +76,7 @@ export const localScenarios: Scenario[] = [
 		id: "manual-extract",
 		tier: "local",
 		category: "capability",
-		title: "browser_extract reads text, tables, links and attributes",
+		title: "jev_extract reads text, tables, links and attributes",
 		notes:
 			"Deterministic read with no model call. Assertions compare exact values, so a partial or hallucinated read fails.",
 		async run(context) {
