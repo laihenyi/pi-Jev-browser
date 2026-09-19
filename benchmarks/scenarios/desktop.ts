@@ -17,6 +17,17 @@ import { check, type Scenario } from "../lib/harness.ts";
 
 const execFileAsync = promisify(execFile);
 const BUNDLE = "com.apple.calculator";
+
+/**
+ * The two goals the desktop tier measures against each other. The enumerated one is
+ * the working recipe; the short one is kept because it documents the boundary.
+ */
+export const DESKTOP_GOALS = {
+	enumerated:
+		"Enter 1234 × 5678 on this calculator, step by step: press 1, then 2, then 3, then 4, then the Multiply button, then 5, then 6, then 7, then 8, then Equals. Never press Clear, All Clear, Delete or Back. Use the recent actions to see which steps you already completed. Choose DONE when the display shows the result.",
+	short:
+		"Compute 1234 times 5678 on this calculator and stop when the display shows the result.",
+};
 const CALCULATOR_APP = "/System/Applications/Calculator.app";
 const EXPECTED = String(1234 * 5678);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -246,12 +257,11 @@ export const desktopScenarios: Scenario[] = [
 	{
 		id: "desktop-calculator-entry",
 		tier: "desktop",
-		category: "limitation",
+		category: "capability",
 		needsCredentials: true,
-		documentsGap: true,
 		title: "Jev completes a ten-step entry in a desktop application",
 		notes:
-			"Known gap, asserted on purpose: the decision layer is calibrated on the web and does not yet hold a ten-step plan on a desktop surface. Measured, it presses Clear in the middle of its own entry and then repeats one digit. The default browser rules, a desktop rules text, and an explicitly enumerated goal were all tried and all failed, so this is not a phrasing problem. The scenario passes while the gap is present and fails once Jev gets it right, so the limitation cannot quietly disappear.",
+			"The working recipe, found with benchmarks/desktop-calibration.ts: a goal that enumerates the steps plus a rules text that makes the next step mechanical. Both were required; neither alone got past a two-press prefix. The goal carries the plan because the decision layer re-derives its position from the window text on every step and does not invent a plan.",
 		skip: hostSkipReason,
 		async run(context) {
 			const driver = desktopDriver({ bundleId: BUNDLE });
@@ -259,10 +269,7 @@ export const desktopScenarios: Scenario[] = [
 				await driver.activate();
 				await reset(driver);
 				const result = await runJev(
-					{
-						goal: "Compute 1234 times 5678 on this calculator and stop when the display shows the result.",
-						maxSteps: 16,
-					},
+					{ goal: DESKTOP_GOALS.enumerated, maxSteps: 16 },
 					{ driver, policy: context.jev(() => null, DESKTOP_RULES) },
 				);
 				const display = await displayText(driver);
@@ -297,4 +304,46 @@ export const desktopScenarios: Scenario[] = [
 			}
 		},
 	},
+	{
+		id: "desktop-goal-needs-a-plan",
+		tier: "desktop",
+		category: "limitation",
+		needsCredentials: true,
+		documentsGap: true,
+		title: "Jev holds an enumerated plan but does not invent one",
+		notes:
+			"Known gap, asserted on purpose: the same task with a short goal fails. Measured with the calibration tool, the calibrated rules plus a short goal reached a correct prefix of 1 of 10 presses, while the same rules with an enumerated goal reached 10 of 10, so the difference is the plan in the goal and not the rules. The scenario asserts the desired behaviour, so it shows as GAP while the limitation exists and turns into FAIL once the decision layer works out its own plan.",
+		skip: hostSkipReason,
+		async run(context) {
+			const driver = desktopDriver({ bundleId: BUNDLE });
+			try {
+				await driver.activate();
+				await reset(driver);
+				const result = await runJev(
+					{ goal: DESKTOP_GOALS.short, maxSteps: 16 },
+					{ driver, policy: context.jev(() => null, DESKTOP_RULES) },
+				);
+				const display = await displayText(driver);
+				return {
+					checks: [
+						check(
+							"the display shows the requested result from a short goal alone",
+							displayValues(display).includes(EXPECTED),
+							display,
+						),
+						check("Jev reported DONE", result.stopReason === "model_done", result.stopReason),
+					],
+					metrics: {
+						executedSteps: result.steps.filter((step) => step.status === "executed").length,
+						stopReason: result.stopReason,
+						display,
+						expected: EXPECTED,
+					},
+				};
+			} finally {
+				await driver.close();
+			}
+		},
+	},
 ];
+

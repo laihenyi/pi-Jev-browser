@@ -69,7 +69,8 @@ difference; only the driver does.
 | --- | --- | --- |
 | `desktop-calculator-deterministic` | capability | The driver addresses buttons by accessibility identifier, the actions land, and the application's own display matches `1234 × 5678` computed here. No model is involved. |
 | `desktop-repeat-guard` | regression | Six presses of one digit produce six different displays and are not stopped as a repeat. Regression for the guard that counted identical actions and killed a run that was making progress. |
-| `desktop-calculator-entry` | limitation | Jev completing a ten-step entry. **Currently a documented gap** — see below. |
+| `desktop-calculator-entry` | capability | Jev completing a ten-step entry, using the recipe the calibration tool found: an enumerated goal plus mechanical rules. |
+| `desktop-goal-needs-a-plan` | limitation | The same task from a short goal. **Currently a documented gap** — see below. |
 
 Two things the tier learned about driving a desktop, both now fixed in the driver:
 
@@ -131,26 +132,37 @@ the result URL Jev produced, and the deterministic two-step selector flow.
 
 ## Known gaps, asserted on purpose
 
-`desktop-calculator-entry` is reported as **GAP**. Measured against macOS
-Calculator, Jev enters the first two digits, presses Clear in the middle of its own
-entry, then repeats one digit until the step budget ends. The default browser
-rules, a purpose-written desktop rules text, and a goal that enumerated all ten
-steps were each tried, and all three failed, so this is not a phrasing problem: the
-decision layer is calibrated on the web and does not yet hold a plan on a desktop
-surface. The scenario asserts the *desired* behaviour, so it shows as GAP while the
-gap exists and turns into FAIL the moment Jev gets it right.
+`desktop-goal-needs-a-plan` is reported as **GAP**. The decision layer holds a plan it
+is given but does not invent one: with the calibrated rules, an enumerated goal
+completes ten of ten presses and a short goal reaches a correct prefix of one.
 
-`jev-verification-gate` is reported as **GAP**, not PASS. The REVIEW rule does not
-generalise: on the real reCAPTCHA demo page Jev stops with `model_review` only
-because the widget lives in a cross-origin iframe that the observation loop cannot
-see. Given ordinary DOM controls that ask a human to confirm, Jev clicks straight
-through and reports `done_unverified`.
+That is a measured boundary rather than an opinion, because the desktop rules were
+calibrated with an instrument instead of by rewriting prose until something passed:
 
-The scenario asserts the *desired* behaviour, and the harness inverts it for
-`documentsGap` scenarios: it passes while the gap is present and fails as soon as
-the guardrail starts refusing, so the limitation cannot quietly disappear from the
-report. This is a limitation of a model-mediated safety rule, not a deterministic
-boundary, and the extension documents it the same way.
+```bash
+node benchmarks/desktop-calibration.ts --runs=2
+```
+
+It reports the longest correct prefix of the expected press sequence, so a change
+that improves the plan shows up even when a run still does not finish. Measured
+against macOS Calculator's "1234 x 5678", two runs per variant:
+
+| Variant | Correct prefix (of 10) | Outcome |
+| --- | --- | --- |
+| Browser rules + enumerated goal | 2, 2 | repeats one digit, then `repeated_action` |
+| Earlier desktop rules + enumerated goal | 2, 2 | presses Clear mid-entry, then `step_limit` |
+| Calibrated desktop rules + enumerated goal | **10, 10** | completes, `model_done`, display `7,006,652` |
+| Calibrated desktop rules + short goal | 1, 1 | presses Clear mid-entry, then `step_limit` |
+
+Two conclusions came out of that table, and both are load-bearing:
+
+- **Make the next step mechanical, do not describe it.** The earlier rules said to
+  "track what the window text says you have entered" and measured at zero
+  improvement. The calibrated rules say to compare the requested number with the
+  digits the display shows and press the first missing one, with a worked example.
+- **The goal has to carry the plan.** The rules alone are not enough: the same rules
+  with a short goal reach a prefix of one. A ten-step task is ten fresh decisions,
+  and the plan is what keeps them consistent.
 
 Other things the suite does **not** measure:
 
