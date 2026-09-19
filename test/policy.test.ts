@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { type Observation } from "../src/observe.ts";
 import {
+	buildPlanQuestion,
 	buildQuestions,
 	createJevPolicy,
+	describePlanStep,
+	PLANNING_RULES,
+	plannedGoal,
 	createPiTextGenerator,
 	createTypeSafeClient,
 	parseText,
@@ -357,4 +361,102 @@ test("pi text generator reports missing or ambiguous model configuration", async
 		}),
 		/No authentication is configured/,
 	);
+});
+
+test("the plan question offers every target plus PLAN_COMPLETE and NO_PLAN, and carries the plan so far", () => {
+	const q = buildPlanQuestion(observation, "Search for cats", ['type into "Query"']);
+	assert.equal(q.step.type, "choice");
+	assert.deepEqual(Object.keys(q.step.criteria), ["PLAN_COMPLETE", "NO_PLAN", "TYPE_TEXT:1", "CLICK:2"]);
+	const instructions = q.step.instructions as Record<string, unknown>;
+	assert.equal(instructions.goal, "Search for cats");
+	assert.deepEqual(instructions.planSoFar, ['type into "Query"']);
+	assert.equal(instructions.rules, PLANNING_RULES);
+	// Planning never offers the executing loop's terminal choices: nothing is acted on.
+	assert.equal("DONE" in q.step.criteria, false);
+	assert.equal("WAIT" in q.step.criteria, false);
+});
+
+test("plan steps are written label first with the stable identifier, and the planned goal enumerates them", () => {
+	assert.equal(
+		describePlanStep({ id: "3", operation: "CLICK", label: "1", value: "", identifier: "One" }),
+		'press "1" (identifier One)',
+	);
+	assert.equal(describePlanStep({ id: "4", operation: "TYPE_TEXT", label: "Query", value: "" }), 'type into "Query"');
+	assert.equal(
+		describePlanStep({ id: "5", operation: "SELECT", label: "Tier", value: "", option: "pro" }),
+		'select "Tier" → pro',
+	);
+	const goal = plannedGoal("Compute 1 + 1", ['press "1"', 'press "+"']);
+	assert.match(goal, /^Compute 1 \+ 1\n/);
+	assert.match(goal, /\n1\. press "1"\n2\. press "\+"\n/);
+});
+
+/** A System One stub that answers the plan question from a script, recording each request. */
+function planningClient(answers: string[]) {
+	const states: Array<Record<string, any>> = [];
+	let call = 0;
+	const client = createTypeSafeClient(
+		{ apiKey: "offline-test-key", baseUrl: "https://typesafe.example.test", model: "jev-latest" },
+		{
+			fetch: async (_input, init) => {
+				const body = JSON.parse(String(init?.body));
+				states.push({ state: JSON.parse(body.state), questions: body.questions });
+				const choice = answers[Math.min(call++, answers.length - 1)];
+				const choices = Object.keys(body.questions.step.criteria);
+				return Response.json({
+					model: "jev-latest",
+					answers: {
+						step: {
+							type: "choice",
+							choice,
+							confidence: 0.9,
+							probabilities: Object.fromEntries(choices.map((c) => [c, c === choice ? 0.9 : 0.01])),
+						},
+					},
+					usage: { input_tokens: 10, output_tokens: 0 },
+				});
+			},
+		},
+	);
+	return { client, states };
+}
+
+test("planning chooses one step at a time against the unchanged observation until PLAN_COMPLETE", async () => {
+	const { client, states } = planningClient(["TYPE_TEXT:1", "CLICK:2", "PLAN_COMPLETE"]);
+	const policy = createJevPolicy({ text: async () => ({ text: "x" }), client, planning: true });
+	assert.ok(policy.plan);
+	const plan = await policy.plan(observation, "Search for cats", new AbortController().signal);
+	assert.deepEqual(plan, ['type into "Query"', 'press "Search"']);
+	assert.equal(states.length, 3);
+	// Each request carries the same observation and the plan built so far.
+	assert.deepEqual(states.map((s) => s.state.planSoFar), [[], ['type into "Query"'], ['type into "Query"', 'press "Search"']]);
+	assert.ok(states.every((s) => s.state.page.url === "https://example.test"));
+	assert.ok(states.every((s) => Object.keys(s.questions).join() === "step"));
+});
+
+test("planning yields no plan when the model declines, never converges, or plans nothing", async () => {
+	const declined = createJevPolicy({ text: async () => ({ text: "x" }), client: planningClient(["NO_PLAN"]).client, planning: true });
+	assert.equal(await declined.plan!(observation, "Search", new AbortController().signal), null);
+
+	const empty = createJevPolicy({ text: async () => ({ text: "x" }), client: planningClient(["PLAN_COMPLETE"]).client, planning: true });
+	assert.equal(await empty.plan!(observation, "Search", new AbortController().signal), null);
+
+	const looping = planningClient(["CLICK:2"]);
+	const bounded = createJevPolicy({ text: async () => ({ text: "x" }), client: looping.client, planning: { maxSteps: 4 } });
+	assert.equal(await bounded.plan!(observation, "Search", new AbortController().signal), null);
+	assert.equal(looping.states.length, 4);
+
+	await assert.rejects(
+		createJevPolicy({ text: async () => ({ text: "x" }), client: planningClient(["TELEPORT"]).client, planning: true }).plan!(
+			observation,
+			"Search",
+			new AbortController().signal,
+		),
+		/unoffered plan step/,
+	);
+});
+
+test("planning is off unless asked for", () => {
+	const policy = createJevPolicy({ text: async () => ({ text: "x" }), client: planningClient([]).client });
+	assert.equal(policy.plan, undefined);
 });

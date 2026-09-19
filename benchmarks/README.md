@@ -70,7 +70,7 @@ difference; only the driver does.
 | `desktop-calculator-deterministic` | capability | The driver addresses buttons by accessibility identifier, the actions land, and the application's own display matches `1234 × 5678` computed here. No model is involved. |
 | `desktop-repeat-guard` | regression | Six presses of one digit produce six different displays and are not stopped as a repeat. Regression for the guard that counted identical actions and killed a run that was making progress. |
 | `desktop-calculator-entry` | capability | Jev completing a ten-step entry, using the recipe the calibration tool found: an enumerated goal plus mechanical rules. |
-| `desktop-goal-needs-a-plan` | limitation | The same task from a short goal. **Currently a documented gap** — see below. |
+| `desktop-goal-needs-a-plan` | capability | The same task from a short goal. Jev plans the key sequence first (asserted step by step), then executes it. Formerly a documented gap — see below. |
 
 Two things the tier learned about driving a desktop, both now fixed in the driver:
 
@@ -130,17 +130,18 @@ The nonstop fare was confirmed three independent ways: Jev's own final page text
 (`All filters (1)`, `Nonstop`, `1 result returned`), a deterministic extract of
 the result URL Jev produced, and the deterministic two-step selector flow.
 
-## Known gaps, asserted on purpose
+## Planning: a gap that was measured, then closed
 
-`desktop-goal-needs-a-plan` is reported as **GAP**. The decision layer holds a plan it
-is given but does not invent one: with the calibrated rules, an enumerated goal
-completes ten of ten presses and a short goal reaches a correct prefix of one.
+`desktop-goal-needs-a-plan` used to be reported as **GAP**. The decision layer held a
+plan it was given but did not invent one: with the calibrated rules, an enumerated
+goal completed ten of ten presses and a short goal reached a correct prefix of one.
 
-That is a measured boundary rather than an opinion, because the desktop rules were
+That was a measured boundary rather than an opinion, because the desktop rules were
 calibrated with an instrument instead of by rewriting prose until something passed:
 
 ```bash
-node benchmarks/desktop-calibration.ts --runs=2
+node benchmarks/desktop-calibration.ts --runs=2            # all variants
+node benchmarks/desktop-calibration.ts --runs=2 --variants=D   # one variant
 ```
 
 It reports the longest correct prefix of the expected press sequence, so a change
@@ -153,8 +154,9 @@ against macOS Calculator's "1234 x 5678", two runs per variant:
 | Earlier desktop rules + enumerated goal | 2, 2 | presses Clear mid-entry, then `step_limit` |
 | Calibrated desktop rules + enumerated goal | **10, 10** | completes, `model_done`, display `7,006,652` |
 | Calibrated desktop rules + short goal | 1, 1 | presses Clear mid-entry, then `step_limit` |
+| Calibrated desktop rules + short goal + **planning** | **10, 10** | plans all ten presses first, completes, `model_done` |
 
-Two conclusions came out of that table, and both are load-bearing:
+Three conclusions came out of that table, and all are load-bearing:
 
 - **Make the next step mechanical, do not describe it.** The earlier rules said to
   "track what the window text says you have entered" and measured at zero
@@ -163,6 +165,23 @@ Two conclusions came out of that table, and both are load-bearing:
 - **The goal has to carry the plan.** The rules alone are not enough: the same rules
   with a short goal reach a prefix of one. A ten-step task is ten fresh decisions,
   and the plan is what keeps them consistent.
+- **The decision layer can make that plan itself, with the tool it already has.**
+  The provider only answers choice questions, so the planning phase asks one: given
+  the unchanged initial observation and the plan so far, which target is the next
+  step, or is the plan complete? It repeats that until `PLAN_COMPLETE` (bounded), and
+  the loop then runs against the user's goal plus the enumerated plan. Four measured
+  runs planned the full sequence and executed 10 of 10; the plan is written to the
+  trace as a `plan` step. Planning is opt-in (`createJevPolicy({ planning: true })`)
+  because a plan made from one observation only covers the targets visible in it,
+  which suits a single application window and would mislead on a multi-page web task.
+
+One measurement trap surfaced along the way: **Calculator restores its last
+expression across a relaunch**, and after a completed calculation the first press
+of the clear key only clears the entry. A run that started on top of the previous
+answer would pass on numbers it never entered, so both the scenarios and the
+calibration tool now clear until the display reads 0 and fail if it will not.
+
+## Known gaps, asserted on purpose
 
 Other things the suite does **not** measure:
 

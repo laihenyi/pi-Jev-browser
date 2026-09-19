@@ -123,16 +123,28 @@ async function displayText(driver: DesktopDriver, budgetMs = 4000): Promise<stri
 	return previous;
 }
 
+/**
+ * Clears until the display reads 0. One press is not enough: Calculator restores its
+ * last expression across a relaunch, and after a completed calculation the first
+ * press only clears the entry, so a run could start on top of the previous answer
+ * and pass on numbers it never entered. The clear button is "AllClear" before an
+ * entry and "Clear" afterwards.
+ */
 async function reset(driver: DesktopDriver) {
-	const snapshot = await driver.observe();
-	// The clear button is "AllClear" before an entry and "Clear" afterwards.
-	const clear = snapshot.data.targets.find((target) =>
-		/^(AllClear|Clear)$/.test(target.identifier ?? ""),
-	);
-	if (clear)
+	for (let attempt = 0; attempt < 4; attempt++) {
+		const snapshot = await driver.observe();
+		const clear = snapshot.data.targets.find((target) =>
+			/^(AllClear|Clear)$/.test(target.identifier ?? ""),
+		);
+		if (!clear) break;
 		await snapshot.execute("CLICK", clear, undefined, AbortSignal.timeout(5000));
-	// Let the display settle so the first press does not race a fresh launch.
-	await displayText(driver);
+		// Let the display settle so the first press does not race a fresh launch.
+		const display = await displayText(driver);
+		if (displayValues(display).every((value) => value === "0")) return;
+	}
+	const display = await displayText(driver);
+	if (!displayValues(display).every((value) => value === "0"))
+		throw new Error(`Calculator would not clear; display still reads ${JSON.stringify(display)}`);
 }
 
 async function pressIdentifier(driver: DesktopDriver, identifier: string) {
@@ -307,12 +319,11 @@ export const desktopScenarios: Scenario[] = [
 	{
 		id: "desktop-goal-needs-a-plan",
 		tier: "desktop",
-		category: "limitation",
+		category: "capability",
 		needsCredentials: true,
-		documentsGap: true,
-		title: "Jev holds an enumerated plan but does not invent one",
+		title: "Jev works out its own plan from a short goal, then executes it",
 		notes:
-			"Known gap, asserted on purpose: the same task with a short goal fails. Measured with the calibration tool, the calibrated rules plus a short goal reached a correct prefix of 1 of 10 presses, while the same rules with an enumerated goal reached 10 of 10, so the difference is the plan in the goal and not the rules. The scenario asserts the desired behaviour, so it shows as GAP while the limitation exists and turns into FAIL once the decision layer works out its own plan.",
+			"Formerly a documented gap: the decision layer executed an enumerated plan but did not invent one (short goal: correct prefix 1 of 10; enumerated goal: 10 of 10, same rules). The planning phase closes it with the same choice model: before acting, it chooses the next plan step against the unchanged initial observation until it says PLAN_COMPLETE, and the loop then runs against the goal plus the enumerated plan. The plan is asserted here as well as the arithmetic, so a run that got the right display by accident still fails. Without planning, the same goal still fails; benchmarks/desktop-calibration.ts variant C keeps that measurement.",
 		skip: hostSkipReason,
 		async run(context) {
 			const driver = desktopDriver({ bundleId: BUNDLE });
@@ -321,9 +332,12 @@ export const desktopScenarios: Scenario[] = [
 				await reset(driver);
 				const result = await runJev(
 					{ goal: DESKTOP_GOALS.short, maxSteps: 16 },
-					{ driver, policy: context.jev(() => null, DESKTOP_RULES) },
+					{ driver, policy: context.jev(() => null, DESKTOP_RULES, { planning: true }) },
 				);
 				const display = await displayText(driver);
+				const planIdentifiers = (result.plan ?? []).map(
+					(step) => /\(identifier ([^)]+)\)/.exec(step)?.[1] ?? step,
+				);
 				return {
 					checks: [
 						check(
@@ -331,10 +345,16 @@ export const desktopScenarios: Scenario[] = [
 							displayValues(display).includes(EXPECTED),
 							display,
 						),
+						check(
+							"the plan enumerates the whole key sequence",
+							JSON.stringify(planIdentifiers) === JSON.stringify(SEQUENCE),
+							JSON.stringify(planIdentifiers),
+						),
 						check("Jev reported DONE", result.stopReason === "model_done", result.stopReason),
 					],
 					metrics: {
 						executedSteps: result.steps.filter((step) => step.status === "executed").length,
+						planSteps: result.plan?.length ?? 0,
 						stopReason: result.stopReason,
 						display,
 						expected: EXPECTED,

@@ -233,6 +233,16 @@ excluded by subrole, since pressing close terminates an application that quits w
 its last window. Desktop scraping and driving is covered by the `desktop` benchmark
 tier, which verifies an arithmetic result computed outside the application.
 
+The loop can also plan before it acts. `createJevPolicy({ planning: true })` adds a
+planning phase that runs once, against the initial observation: the same choice
+model picks the next step of a plan (or `PLAN_COMPLETE`) until the plan is finished,
+and the run then executes the user's goal plus the enumerated steps. This closed a
+measured gap on the desktop tier, where a short goal ("compute 1234 times 5678")
+reached one correct press without a plan and ten of ten with one. It is opt-in
+because a plan made from one observation only covers what that observation shows,
+which suits an application window and misleads on a multi-page web task. The plan
+is written to the trace as a `plan` step and returned in the run result.
+
 `test/driver.test.ts` proves the boundary is real: it drives the loop with an
 in-memory driver that has no Playwright, no DOM and no browser, and still exercises
 `done_unverified`, `model_review`, `model_blocked`, `text_unavailable`,

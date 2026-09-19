@@ -46,7 +46,11 @@ export interface ScenarioContext {
 	configure(patch: Record<string, unknown>): void;
 	manager(): PiBrowserManager;
 	/** Jev policy backed by a scripted text helper, so no pi model is required. */
-	jev(answerFor: (goal: string) => string | null, rules?: string): JevPolicy;
+	jev(
+		answerFor: (goal: string) => string | null,
+		rules?: string,
+		options?: { planning?: boolean },
+	): JevPolicy;
 	outputDir: string;
 	hasCredentials: boolean;
 }
@@ -127,10 +131,11 @@ export async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
 			managers.push(manager);
 			return manager;
 		},
-		jev(answerFor, rules) {
+		jev(answerFor, rules, options) {
 			const settings = modelSettings();
 			return createJevPolicy({
 				rules,
+				planning: options?.planning === true,
 				credentials: process.env.TYPESAFE_API_KEY
 					? undefined
 					: settings.typesafe

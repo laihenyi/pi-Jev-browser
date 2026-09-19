@@ -6,7 +6,9 @@ import {
 	type ObservationSnapshot,
 	type ObservedTarget,
 } from "../src/driver.ts";
-import { runJev } from "../src/loop.ts";
+import { type RunStep, runJev } from "../src/loop.ts";
+
+type RunStepLike = RunStep;
 import { type JevPolicy } from "../src/policy.ts";
 
 /**
@@ -297,4 +299,89 @@ test("a control whose every press yields novel state is bounded by the backstop"
 	assert.equal(result.stopReason, "repeated_action");
 	assert.equal(fake.executed.length, 12);
 	assert.match(result.message, /in a row with changing state/);
+});
+
+test("a policy that can plan runs against its plan, planned once from the initial state", async () => {
+	const fake = fakeDriver({
+		observations: [
+			observation({ text: "0", targets: [target("One"), target("Equals")] }),
+			observation({ text: "1", targets: [target("One"), target("Equals")] }),
+			observation({ text: "1 =", targets: [target("One"), target("Equals")] }),
+		],
+	});
+	const goals: string[] = [];
+	const planCalls: Array<{ text: string; goal: string }> = [];
+	const steps: RunStepLike[] = [];
+	const base = scripted([{ target: target("One") }, { target: target("Equals") }, { operation: "DONE" }]);
+	const policy: JevPolicy = {
+		...base,
+		async choose(data, goal, history, signal) {
+			goals.push(goal);
+			return base.choose(data, goal, history, signal);
+		},
+		async plan(data, goal) {
+			planCalls.push({ text: data.text, goal });
+			return ['press "1" (identifier One)', 'press "=" (identifier Equals)'];
+		},
+	};
+	const result = await runJev(
+		{ goal: "Enter 1 and press equals" },
+		{ driver: fake.driver, policy, onStep: async (step) => void steps.push(step) },
+	);
+	assert.equal(result.status, "done_unverified");
+	// Planned exactly once, from the first observation, against the user's own goal.
+	assert.deepEqual(planCalls, [{ text: "0", goal: "Enter 1 and press equals" }]);
+	assert.deepEqual(result.plan, ['press "1" (identifier One)', 'press "=" (identifier Equals)']);
+	// Every decision saw the user's words plus the enumerated plan.
+	assert.equal(goals.length, 3);
+	for (const goal of goals) {
+		assert.match(goal, /^Enter 1 and press equals\n/);
+		assert.match(goal, /1\. press "1" \(identifier One\)\n2\. press "=" \(identifier Equals\)/);
+	}
+	// The plan is traced so the agent can read what the run was following.
+	const traced = steps.filter((step) => step.status === "plan");
+	assert.equal(traced.length, 1);
+	assert.equal(traced[0].operation, "PLAN");
+	assert.match(String(traced[0].reason), /identifier One\) \| press "="/);
+	assert.equal(fake.executed.length, 2);
+});
+
+test("a planner that declines leaves the goal exactly as the user wrote it", async () => {
+	const fake = fakeDriver({
+		observations: [observation({ targets: [target("go")] }), observation({ text: "done" })],
+	});
+	const goals: string[] = [];
+	const steps: RunStepLike[] = [];
+	const base = scripted([{ target: target("go") }, { operation: "DONE" }]);
+	const policy: JevPolicy = {
+		...base,
+		async choose(data, goal, history, signal) {
+			goals.push(goal);
+			return base.choose(data, goal, history, signal);
+		},
+		async plan() {
+			return null;
+		},
+	};
+	const result = await runJev(
+		{ goal: "Reach the end" },
+		{ driver: fake.driver, policy, onStep: async (step) => void steps.push(step) },
+	);
+	assert.equal(result.status, "done_unverified");
+	assert.equal(result.plan, undefined);
+	assert.deepEqual(goals, ["Reach the end", "Reach the end"]);
+	assert.deepEqual(
+		steps.filter((step) => step.status === "plan").map((step) => step.reason),
+		["no_plan"],
+	);
+});
+
+test("a policy without a planner never sees a plan step", async () => {
+	const fake = fakeDriver({ observations: [observation({ text: "done" })] });
+	const steps: RunStepLike[] = [];
+	await runJev(
+		{ goal: "Nothing to do" },
+		{ driver: fake.driver, policy: scripted([{ operation: "DONE" }]), onStep: async (step) => void steps.push(step) },
+	);
+	assert.equal(steps.some((step) => step.status === "plan"), false);
 });

@@ -14,7 +14,7 @@ import type { TextGenerator } from "../src/policy.ts";
  * the run still does not finish.
  *
  * Run it with the benchmark's credentials available:
- *   node benchmarks/desktop-calibration.ts [--runs=2]
+ *   node benchmarks/desktop-calibration.ts [--runs=2] [--variants=C,D]
  */
 
 const BUNDLE = "com.apple.calculator";
@@ -29,12 +29,14 @@ interface Variant {
 	name: string;
 	goal: string;
 	rules?: string;
+	planning?: boolean;
 }
 
 const VARIANTS: Variant[] = [
 	{ name: "A browser rules + enumerated goal", goal: ENUMERATED_GOAL },
 	{ name: "B desktop rules + enumerated goal", goal: ENUMERATED_GOAL, rules: DESKTOP_RULES },
 	{ name: "C desktop rules + short goal", goal: SHORT_GOAL, rules: DESKTOP_RULES },
+	{ name: "D desktop rules + short goal + planning", goal: SHORT_GOAL, rules: DESKTOP_RULES, planning: true },
 ];
 
 /** Records what was actually pressed, by identifier, which is not localised. */
@@ -73,11 +75,17 @@ function analyse(presses: string[]) {
 	return { prefix, destructive, fromFirstDigit };
 }
 
+/** Clears until the display reads 0: Calculator restores its last expression across a relaunch. */
 async function reset(driver: DesktopDriver) {
-	const snapshot = await driver.observe();
-	const clear = snapshot.data.targets.find((target) => /^(AllClear|Clear)$/.test(target.identifier ?? ""));
-	if (clear) await snapshot.execute("CLICK", clear, undefined, AbortSignal.timeout(5000));
-	await sleep(400);
+	for (let attempt = 0; attempt < 4; attempt++) {
+		const snapshot = await driver.observe();
+		const clear = snapshot.data.targets.find((target) => /^(AllClear|Clear)$/.test(target.identifier ?? ""));
+		if (!clear) break;
+		await snapshot.execute("CLICK", clear, undefined, AbortSignal.timeout(5000));
+		await sleep(400);
+		const display = (await driver.observe()).data.text.replaceAll("\u200e", "");
+		if ((display.match(/[\d][\d,]*/g) ?? []).every((value) => value.replaceAll(",", "") === "0")) return;
+	}
 }
 
 async function runVariant(variant: Variant, text: TextGenerator) {
@@ -88,7 +96,7 @@ async function runVariant(variant: Variant, text: TextGenerator) {
 		await reset(driver);
 		const result = await runJev(
 			{ goal: variant.goal, maxSteps: 16 },
-			{ driver: loggingDriver(driver, presses), policy: createJevPolicy({ text, rules: variant.rules }) },
+			{ driver: loggingDriver(driver, presses), policy: createJevPolicy({ text, rules: variant.rules, planning: variant.planning === true }) },
 		);
 		const display = (await driver.observe()).data.text.replaceAll("\u200e", "").trim();
 		const analysis = analyse(presses);
@@ -99,6 +107,7 @@ async function runVariant(variant: Variant, text: TextGenerator) {
 			stopReason: String(result.stopReason),
 			display,
 			correct: display.replaceAll(",", "").includes(String(1234 * 5678)),
+			plan: result.plan?.join(" | ") ?? null,
 		};
 	} finally {
 		await driver.close();
@@ -108,10 +117,20 @@ async function runVariant(variant: Variant, text: TextGenerator) {
 const runs = Number(
 	process.argv.find((argument) => argument.startsWith("--runs="))?.slice("--runs=".length) ?? 2,
 );
+/** --variants=C,D limits a session to the letters named, so one change can be measured alone. */
+const onlyVariants = process.argv
+	.find((argument) => argument.startsWith("--variants="))
+	?.slice("--variants=".length)
+	.split(",")
+	.map((letter) => letter.trim().toUpperCase())
+	.filter(Boolean);
+const selected = onlyVariants?.length
+	? VARIANTS.filter((variant) => onlyVariants.includes(variant.name[0]))
+	: VARIANTS;
 const text: TextGenerator = async () => ({ text: '{"text":null}' });
 const table: Array<Record<string, unknown>> = [];
 
-for (const variant of VARIANTS) {
+for (const variant of selected) {
 	const results = [];
 	for (let attempt = 0; attempt < runs; attempt++) {
 		const outcome = await runVariant(variant, text);
@@ -122,7 +141,8 @@ for (const variant of VARIANTS) {
 				`${outcome.correct ? " ✅ 完成" : ""}` +
 				`${outcome.destructive ? " ⚠ 中途按了清除" : ""}\n` +
 				`  顯示=${JSON.stringify(outcome.display)} stop=${outcome.stopReason}\n` +
-				`  按下的 identifier: ${outcome.presses.join(", ")}\n`,
+				`  按下的 identifier: ${outcome.presses.join(", ")}\n` +
+				(outcome.plan ? `  計畫: ${outcome.plan}\n` : ""),
 		);
 	}
 	const best = Math.max(...results.map((result) => result.prefix));
@@ -131,7 +151,7 @@ for (const variant of VARIANTS) {
 }
 
 console.log("\n=== 摘要（正確前綴長度，滿分 10）===");
-for (const variant of VARIANTS) {
+for (const variant of selected) {
 	const rows = table.filter((row) => row.variant === variant.name);
 	console.log(
 		`  ${variant.name.padEnd(38)} ${rows.map((row) => `${row.prefix}`).join(", ")}${rows.some((row) => row.correct) ? "  ← 有一次成功" : ""}`,

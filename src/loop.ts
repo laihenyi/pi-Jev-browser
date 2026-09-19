@@ -2,7 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Usage as ModelUsage } from "@earendil-works/pi-ai";
 import { type Driver, StaleObservationError } from "./driver.ts";
 import { failureCategory, describeError } from "./errors.ts";
-import { type JevPolicy } from "./policy.ts";
+import { type JevPolicy, plannedGoal } from "./policy.ts";
 
 export interface RunInput {
 	goal: string;
@@ -19,6 +19,7 @@ export interface RunStep {
 		| "attempted"
 		| "executed"
 		| "decision"
+		| "plan"
 		| "stale"
 		| "text_unavailable";
 	latencyMs: number;
@@ -148,6 +149,14 @@ export async function runJev(
 	let executed = 0;
 	let stage = "observation";
 	let lastPage: ObservedPage | undefined;
+	/**
+	 * The goal the decisions are made against. It starts as the user's words and, when
+	 * the policy can plan, becomes those words plus the enumerated plan. The user's
+	 * goal itself is never rewritten: memory and reporting keep the original.
+	 */
+	let goal = input.goal;
+	let plan: string[] | undefined;
+	let planned = false;
 	let lastActionKey: string | undefined;
 	/**
 	 * Identical actions are only suspicious when they stop producing new state.
@@ -177,6 +186,7 @@ export async function runJev(
 		usage: usage.totalTokens > 0 ? usage : undefined,
 		page: lastPage,
 		warnings: warnings.length > 0 ? warnings : undefined,
+		plan,
 	});
 	try {
 		for (
@@ -195,11 +205,31 @@ export async function runJev(
 				text: snapshot.data.text,
 			};
 			try {
+				if (!planned && policy.plan) {
+					// Plan once, from the initial state, before anything is acted on. A plan
+					// that could not be made leaves the goal as the user wrote it.
+					planned = true;
+					stage = "planning";
+					const planStarted = performance.now();
+					const result = await policy.plan(snapshot.data, input.goal, signal);
+					signal.throwIfAborted();
+					if (result && result.length > 0) {
+						plan = result;
+						goal = plannedGoal(input.goal, result);
+					}
+					await options.onStep?.({
+						step,
+						operation: "PLAN",
+						status: "plan",
+						reason: result && result.length > 0 ? result.join(" | ") : "no_plan",
+						latencyMs: Math.round(performance.now() - planStarted),
+					});
+				}
 				const decisionStarted = performance.now();
 				stage = "evaluation";
 				const decision = await policy.choose(
 					snapshot.data,
-					input.goal,
+					goal,
 					memory.actions,
 					signal,
 				);
@@ -287,7 +317,7 @@ export async function runJev(
 					stage = "text_helper";
 					const cacheKey = JSON.stringify([
 						snapshot.data,
-						input.goal,
+						goal,
 						decision.target,
 						memory.actions,
 					]);
@@ -295,7 +325,7 @@ export async function runJev(
 					if (generated === undefined) {
 						generated = await policy.text(
 							snapshot.data,
-							input.goal,
+							goal,
 							decision.target,
 							memory.actions,
 							signal,

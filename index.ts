@@ -543,6 +543,7 @@ function runSummary(result: RunResult) {
 		failure: result.failure,
 		elapsedMs: result.elapsedMs,
 		steps: result.steps,
+		plan: result.plan,
 		warnings: result.warnings,
 		tracePath: result.tracePath,
 		errorsLogPath: result.errorsLogPath,
