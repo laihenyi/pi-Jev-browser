@@ -348,6 +348,33 @@ async function observeDocument(page: Page) {
 				const nodeHandle = await handle
 					.evaluateHandle((h, target) => {
 						const current = h.read();
+						/**
+						 * Names whatever is intercepting the pointer. A bare "covered" tells the
+						 * agent that something is in the way but not what to do about it, and a cookie
+						 * banner or modal is exactly the case where the next step is obvious once known.
+						 */
+							// Name what intercepted the pointer. A bare "covered" tells the agent that
+							// something is in the way but not what to do about it, and a cookie banner
+							// or modal is exactly the case where the next action is obvious once known.
+							const cover = (element: Element | null) => {
+								if (!element) return "an unrendered point";
+								const role = element.getAttribute("role") ?? element.tagName.toLowerCase();
+								const label = (
+									element.getAttribute("aria-label") ??
+									element.getAttribute("title") ??
+									element.textContent ??
+									""
+								)
+									.replace(/\s+/g, " ")
+									.trim()
+									.slice(0, 80);
+								const id = element.id ? `#${element.id}` : "";
+								const firstClass =
+									typeof element.className === "string" && element.className.trim()
+										? `.${element.className.trim().split(/\s+/)[0]}`
+										: "";
+								return `${role}${id}${firstClass}${label ? ` labelled ${JSON.stringify(label)}` : ""}`;
+							};
 						if (target === undefined || target.operation === "TYPE_TEXT") {
 							if (
 								current.signature !== h.original.signature ||
@@ -369,8 +396,17 @@ async function observeDocument(page: Page) {
 								current.data.targets[i]?.operation === target.operation &&
 								current.data.targets[i]?.option === target.option,
 						);
-						if (currentIndex < 0)
-							throw new Error("Observed target is covered or unavailable.");
+						if (currentIndex < 0) {
+							// The node is still connected but no longer offered, which means something
+							// is now covering it. Say what, so the next step is a dismissal rather than
+							// a guess.
+							const rect = node.getBoundingClientRect();
+							const blocker = document.elementFromPoint(
+								rect.x + rect.width / 2,
+								rect.y + rect.height / 2,
+							);
+							throw new Error(`Observed target is covered by ${cover(blocker)}.`);
+						}
 						const before = h.original.data.targets[index];
 						const after = current.data.targets[currentIndex];
 						if (
@@ -389,8 +425,9 @@ async function observeDocument(page: Page) {
 						if (
 							!node.contains(hit) &&
 							!(node instanceof HTMLLabelElement && node.control?.contains(hit))
-						)
-							throw new Error("Observed target is covered.");
+						) {
+							throw new Error(`Observed target is covered by ${cover(hit)}.`);
+						}
 						return node instanceof HTMLLabelElement &&
 							node.control?.contains(hit)
 							? node.control

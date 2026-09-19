@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { observe } from "../src/observe.ts";
+import { observe, StaleObservationError } from "../src/observe.ts";
 import { launchTestBrowser } from "./helpers.ts";
 
 test("post-action navigation read is recovered without repeating the click", async () => {
@@ -271,6 +271,51 @@ test("observation exposes hidden radio options, covers, and offscreen choices", 
 			);
 		} finally {
 			await replaced.dispose();
+		}
+	} finally {
+		await browser.close();
+	}
+});
+
+test("a target covered after the observation names what intercepted the pointer", async () => {
+	const browser = await launchTestBrowser();
+	try {
+		const page = await browser.newPage();
+		// Targets that cannot receive the pointer are already excluded when the page is
+		// observed, so this covers the remaining window: the overlay appears after the
+		// observation, which is how a cookie banner loading late behaves. Detecting it
+		// needs no pixels, and naming it turns an unactionable stale into a next step.
+		await page.setContent('<button id="buy">Buy</button>');
+		const snapshot = await observe(page);
+		try {
+			const buy = snapshot.data.targets.find((target) => target.label === "Buy");
+			assert.ok(buy, "the button is observed while nothing covers it");
+			await page.evaluate(() => {
+				const dialog = document.createElement("div");
+				dialog.setAttribute("role", "dialog");
+				dialog.setAttribute("aria-label", "We use cookies");
+				dialog.style.cssText = "position:fixed;inset:0;z-index:10";
+				const accept = document.createElement("button");
+				accept.id = "accept";
+				accept.textContent = "Accept cookies";
+				// Kept away from the observed button so the hit test lands on the overlay.
+				accept.style.cssText = "position:absolute;bottom:8px;right:8px";
+				dialog.appendChild(accept);
+				document.body.appendChild(dialog);
+			});
+			await assert.rejects(
+				snapshot.execute("CLICK", buy, undefined, new AbortController().signal),
+				(error: unknown) => {
+					assert.ok(error instanceof StaleObservationError);
+					// Still classified as target_unavailable by the loop, but now actionable.
+					assert.match(error.message, /Observed target is covered by/);
+					assert.match(error.message, /dialog/);
+					assert.match(error.message, /We use cookies/);
+					return true;
+				},
+			);
+		} finally {
+			await snapshot.dispose();
 		}
 	} finally {
 		await browser.close();
