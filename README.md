@@ -221,6 +221,18 @@ Everything Playwright-specific lives there, including the error vocabulary: a
 destroyed execution context is a navigation in progress, and a document that never
 became readable is a browser condition, not a generic failure.
 
+A second driver lives in `src/drivers/desktop.ts` and drives a real macOS
+application through its accessibility tree, with `desktop/ax-helper.swift` as the
+resident helper that walks the tree and performs accessibility actions. It maps onto
+the same `Observation`, so the loop is untouched. Two hard-won details are encoded
+there: applications are addressed by bundle id because display names are localised,
+and the accessible name lives in `AXDescription` while the stable handle is
+`AXIdentifier` (Calculator publishes nothing in `AXTitle` and its multiply button is
+叫「乘」but identified as `Multiply`). Titlebar close/minimize/zoom buttons are
+excluded by subrole, since pressing close terminates an application that quits with
+its last window. Desktop scraping and driving is covered by the `desktop` benchmark
+tier, which verifies an arithmetic result computed outside the application.
+
 `test/driver.test.ts` proves the boundary is real: it drives the loop with an
 in-memory driver that has no Playwright, no DOM and no browser, and still exercises
 `done_unverified`, `model_review`, `model_blocked`, `text_unavailable`,

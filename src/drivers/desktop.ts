@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
 	type Driver,
@@ -150,17 +151,28 @@ export function desktopDriver(options: DesktopDriverOptions): DesktopDriver {
 	};
 
 	const rawObserve = async () => {
-		const response = await call({ cmd: "observe", bundleId });
-		if (response.ok !== true)
-			throw translate(new Error(String(response.error ?? "observe failed")));
-		return response as unknown as {
-			ok: true;
-			app: string;
-			window: string;
-			signature: string;
-			text: string;
-			nodes: RawNode[];
-		};
+		// A window can be momentarily unreadable while an application is launching,
+		// activating, or crossing Spaces: the accessibility server reports the app with
+		// no windows. Retrying briefly keeps that from looking like a missing window,
+		// while a genuinely closed window still surfaces after the deadline.
+		let lastError: unknown = new Error("observe failed");
+		for (let attempt = 0; attempt < 6; attempt++) {
+			const response = await call({ cmd: "observe", bundleId });
+			if (response.ok === true)
+				return response as unknown as {
+					ok: true;
+					app: string;
+					window: string;
+					signature: string;
+					text: string;
+					nodes: RawNode[];
+				};
+			lastError = new Error(String(response.error ?? "observe failed"));
+			if (!/no window|not responding|still launching/i.test(String(response.error)))
+				break;
+			await sleep(300);
+		}
+		throw translate(lastError);
 	};
 
 	const snapshotFrom = (raw: Awaited<ReturnType<typeof rawObserve>>): ObservationSnapshot => {

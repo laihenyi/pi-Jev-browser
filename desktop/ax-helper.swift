@@ -82,6 +82,7 @@ struct Node {
     let element: AXUIElement
     let index: Int
     let role: String
+    let subrole: String
     let name: String
     let value: String
     let identifier: String
@@ -95,7 +96,15 @@ let pressableRoles: Set<String> = [
     "AXMenuButton", "AXLink", "AXDisclosureTriangle", "AXTab", "AXSegment",
 ]
 
-func isInteractive(_ role: String, _ actions: [String]) -> Bool {
+/// Titlebar buttons carry these subroles. They are not part of the application's
+/// content, and pressing close terminates applications that quit with their last
+/// window, so they are never offered as targets.
+let windowControlSubroles: Set<String> = [
+    "AXCloseButton", "AXMinimizeButton", "AXZoomButton", "AXFullScreenButton",
+]
+
+func isInteractive(_ role: String, _ subrole: String, _ actions: [String]) -> Bool {
+    if windowControlSubroles.contains(subrole) { return false }
     if actions.contains(kAXPressAction) { return true }
     if pressableRoles.contains(role) { return true }
     return actions.contains("AXConfirm") || actions.contains("AXPick")
@@ -122,14 +131,16 @@ func observe(bundleId: String) throws -> [String: Any] {
         if depth > 24 || nodes.count >= 400 || seen >= 4000 { return }
         seen += 1
         let role = text(element, kAXRoleAttribute) ?? ""
+        let subrole = text(element, kAXSubroleAttribute) ?? ""
         let elementActions = actions(element)
-        if isInteractive(role, elementActions) {
+        if isInteractive(role, subrole, elementActions) {
             let enabled = (attribute(element, kAXEnabledAttribute) as? Bool) ?? true
             nodes.append(
                 Node(
                     element: element,
                     index: nodes.count,
                     role: role,
+                    subrole: subrole,
                     name: accessibleName(element),
                     value: text(element, kAXValueAttribute).map { String($0.prefix(200)) } ?? "",
                     identifier: text(element, kAXIdentifierAttribute) ?? "",
@@ -148,7 +159,7 @@ func observe(bundleId: String) throws -> [String: Any] {
 
     let windowTitle = text(window, kAXTitleAttribute) ?? ""
     let signature = nodes
-        .map { "\($0.index)|\($0.role)|\($0.name)|\($0.value)|\($0.identifier)|\($0.enabled)" }
+        .map { "\($0.index)|\($0.role)|\($0.subrole)|\($0.name)|\($0.value)|\($0.identifier)|\($0.enabled)" }
         .joined(separator: "\u{1}")
 
     return [
@@ -162,6 +173,7 @@ func observe(bundleId: String) throws -> [String: Any] {
             var entry: [String: Any] = [
                 "index": node.index,
                 "role": node.role,
+                "subrole": node.subrole,
                 "name": node.name,
                 "value": node.value,
                 "identifier": node.identifier,
@@ -221,7 +233,8 @@ func resolve(bundleId: String, signature: String, index: Int) throws -> Node {
     func walk(_ element: AXUIElement, _ depth: Int) {
         if depth > 24 || found != nil { return }
         let role = text(element, kAXRoleAttribute) ?? ""
-        if isInteractive(role, actions(element)) {
+        let subrole = text(element, kAXSubroleAttribute) ?? ""
+        if isInteractive(role, subrole, actions(element)) {
             if counter == index { found = element; return }
             counter += 1
         }
@@ -234,6 +247,7 @@ func resolve(bundleId: String, signature: String, index: Int) throws -> Node {
         element: element,
         index: index,
         role: match["role"] as? String ?? "",
+        subrole: match["subrole"] as? String ?? "",
         name: match["name"] as? String ?? "",
         value: match["value"] as? String ?? "",
         identifier: match["identifier"] as? String ?? "",

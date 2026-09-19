@@ -1,8 +1,17 @@
 import { extractFromPage } from "../../src/extract.ts";
 import { runJev } from "../../src/loop.ts";
+import { browserDriver } from "../../src/observe.ts";
 import { check, idlePolicy, sessionOf, type Scenario } from "../lib/harness.ts";
 
 const allowAll = { assertUrlAllowed: () => undefined };
+
+/** Narrow the manager state union once, so scenario assertions stay readable. */
+const activeState = (state: unknown) =>
+	state as {
+		currentUrl: string;
+		activePageIndex: number;
+		pages: Array<{ url: string }>;
+	};
 
 export const localScenarios: Scenario[] = [
 	{
@@ -139,6 +148,7 @@ export const localScenarios: Scenario[] = [
 			const { page } = sessionOf(manager, host);
 
 			const box = await page.locator("iframe").boundingBox();
+			if (!box) throw new Error("the fixture iframe is missing; this scenario cannot run");
 			const result = await manager.actions(
 				{
 					actions: [
@@ -205,7 +215,7 @@ export const localScenarios: Scenario[] = [
 				if ((await manager.state(host)).pages.length >= 2) break;
 				await new Promise((resolve) => setTimeout(resolve, 100));
 			}
-			const state = await manager.state(host);
+			const state = activeState(await manager.state(host));
 			const warnings = "warnings" in result ? (result.warnings ?? []) : [];
 			const activated = await manager.actions(
 				{ actions: [{ type: "activate_tab", index: 1 }], includeScreenshot: false },
@@ -328,7 +338,7 @@ export const localScenarios: Scenario[] = [
 			const result = await runJev(
 				{ goal: "Find a control that does not exist on this page.", maxSteps: 12 },
 				{
-					page: () => page,
+					driver: browserDriver(() => page),
 					policy: {
 						async choose() {
 							calls++;
@@ -372,7 +382,7 @@ export const localScenarios: Scenario[] = [
 			const result = await runJev(
 				{ goal: "Advance the goal with these controls.", maxSteps: 8 },
 				{
-					page: () => page,
+					driver: browserDriver(() => page),
 					policy: {
 						async choose(observation) {
 							const label = labels[calls++];

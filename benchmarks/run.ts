@@ -10,17 +10,23 @@ import {
 	type ScenarioResult,
 	type Tier,
 } from "./lib/harness.ts";
+import { desktopScenarios } from "./scenarios/desktop.ts";
 import { localScenarios } from "./scenarios/local.ts";
 import { liveScenarios } from "./scenarios/live.ts";
 import { modelScenarios } from "./scenarios/model.ts";
 
-const all: Scenario[] = [...localScenarios, ...modelScenarios, ...liveScenarios];
+const all: Scenario[] = [
+	...localScenarios,
+	...modelScenarios,
+	...liveScenarios,
+	...desktopScenarios,
+];
 const byId = new Map(all.map((scenario) => [scenario.id, scenario]));
 const resultsDir = join(import.meta.dirname, "results");
 
 function parseArgs(argv: string[]) {
 	const options = {
-		suite: "local" as "local" | "model" | "live" | "all",
+		suite: "local" as "local" | "model" | "live" | "desktop" | "all",
 		only: [] as string[],
 		repeat: 1,
 		json: undefined as string | undefined,
@@ -49,7 +55,7 @@ function parseArgs(argv: string[]) {
 const options = parseArgs(process.argv.slice(2));
 
 if (options.list) {
-	for (const tier of ["local", "model", "live"] as Tier[]) {
+	for (const tier of ["local", "model", "live", "desktop"] as Tier[]) {
 		console.log(`\n${tier}:`);
 		for (const scenario of all.filter((entry) => entry.tier === tier))
 			console.log(`  ${scenario.id.padEnd(28)} ${scenario.category.padEnd(11)} ${scenario.title}`);
@@ -58,7 +64,9 @@ if (options.list) {
 }
 
 const tiers: Tier[] =
-	options.suite === "all" ? ["local", "model", "live"] : [options.suite];
+	options.suite === "all"
+		? (["local", "model", "live", "desktop"] as Tier[])
+		: [options.suite];
 let selected = all.filter((scenario) => tiers.includes(scenario.tier));
 if (options.only.length > 0)
 	selected = selected.filter((scenario) => options.only.includes(scenario.id));
@@ -69,7 +77,12 @@ if (selected.length === 0) {
 }
 
 const credentials = hasCredentials();
-if (selected.some((scenario) => scenario.tier !== "local") && !credentials) {
+if (
+	selected.some(
+		(scenario) => scenario.tier !== "local" && scenario.needsCredentials !== false,
+	) &&
+	!credentials
+) {
 	console.error(
 		"Model and live scenarios need a TypeSafe credential (TYPESAFE_API_KEY or typesafe.apiKey in pi-jev-browser.config.json).",
 	);
@@ -77,7 +90,7 @@ if (selected.some((scenario) => scenario.tier !== "local") && !credentials) {
 
 const results: ScenarioResult[] = [];
 for (const scenario of selected) {
-	if (scenario.tier !== "local" && !credentials) {
+	if (scenario.tier !== "local" && scenario.needsCredentials !== false && !credentials) {
 		results.push({
 			id: scenario.id,
 			tier: scenario.tier,

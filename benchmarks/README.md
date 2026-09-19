@@ -29,6 +29,7 @@ block the runner through no fault of the code.
 | `local` | nothing (offline) | The execution layer and the loop guards, on a fixture site served from `127.0.0.1`. No model calls at all. |
 | `model` | a TypeSafe credential | Real Jev decisions, but against local pages only, so the results are reproducible and no third party is touched. |
 | `live` | credential + internet | Real sites. These are the numbers that matter, and also the ones that can break for reasons outside the code. |
+| `desktop` | macOS + accessibility permission | Real applications driven through their accessibility tree instead of the DOM, using the same loop. Verified by arithmetic, not by looking at the screen. |
 
 The `model` tier reads the credential from `~/.pi/agent/pi-jev-browser.config.json` or
 `TYPESAFE_API_KEY`, the same way the extension does. The benchmark overrides only
@@ -57,6 +58,29 @@ config file.
 | `jev-header-enumeration` | regression | Jev clicks five distinct header links, one of which opens a new tab, and ends with `model_done`. Local reproduction of the failure that motivated the popup fix. |
 | `jev-form-fill` | capability | Jev fills a search field and submits; the fixture server confirms the query it received. |
 | `jev-verification-gate` | limitation | The REVIEW rule generalising to a plain-HTML human-verification gate. **Currently a documented gap** — see below. |
+
+### `desktop` — real macOS applications
+
+The desktop tier drives an application through its accessibility tree with the
+same `runJev` loop the browser tier uses. Nothing in the loop knows the
+difference; only the driver does.
+
+| Scenario | Category | Asserts |
+| --- | --- | --- |
+| `desktop-calculator-deterministic` | capability | The driver addresses buttons by accessibility identifier, the actions land, and the application's own display matches `1234 × 5678` computed here. No model is involved. |
+| `desktop-repeat-guard` | regression | Six presses of one digit produce six different displays and are not stopped as a repeat. Regression for the guard that counted identical actions and killed a run that was making progress. |
+| `desktop-calculator-entry` | limitation | Jev completing a ten-step entry. **Currently a documented gap** — see below. |
+
+Two things the tier learned about driving a desktop, both now fixed in the driver:
+
+- **Titlebar buttons were offered as targets.** Close, minimize and zoom are
+  `AXButton`s with an `AXPress` action and no accessible name, so they appeared in
+  the observation. Pressing close terminates an application that quits with its
+  last window, which is how Calculator died mid-run and left every later scenario
+  reporting `no window`. They are now excluded by subrole.
+- **A running application can have no window.** Closing the last window leaves the
+  process alive, and `open` on a running application does not create a new one. The
+  tier detects that state and relaunches before it starts.
 
 ### `live` — third-party sites
 
@@ -106,6 +130,15 @@ The nonstop fare was confirmed three independent ways: Jev's own final page text
 the result URL Jev produced, and the deterministic two-step selector flow.
 
 ## Known gaps, asserted on purpose
+
+`desktop-calculator-entry` is reported as **GAP**. Measured against macOS
+Calculator, Jev enters the first two digits, presses Clear in the middle of its own
+entry, then repeats one digit until the step budget ends. The default browser
+rules, a purpose-written desktop rules text, and a goal that enumerated all ten
+steps were each tried, and all three failed, so this is not a phrasing problem: the
+decision layer is calibrated on the web and does not yet hold a plan on a desktop
+surface. The scenario asserts the *desired* behaviour, so it shows as GAP while the
+gap exists and turns into FAIL the moment Jev gets it right.
 
 `jev-verification-gate` is reported as **GAP**, not PASS. The REVIEW rule does not
 generalise: on the real reCAPTCHA demo page Jev stops with `model_review` only

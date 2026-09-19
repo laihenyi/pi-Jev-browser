@@ -7,7 +7,7 @@ import { createJevPolicy } from "../../src/policy.ts";
 import { PiBrowserManager } from "../../src/runtime.ts";
 import { startFixtures, type FixtureServer } from "./fixtures.ts";
 
-export type Tier = "local" | "model" | "live";
+export type Tier = "local" | "model" | "live" | "desktop";
 export type Category = "regression" | "capability" | "limitation";
 
 export interface Check {
@@ -30,6 +30,13 @@ export interface Scenario {
 	notes: string;
 	/** True when "passing" means the documented gap is still present. */
 	documentsGap?: boolean;
+	/**
+	 * False when the scenario never calls a model, so it can run without a
+	 * credential. Defaults to true for every tier except `local`.
+	 */
+	needsCredentials?: boolean;
+	/** Returns a reason to skip when the host cannot run this scenario at all. */
+	skip?(context: ScenarioContext): Promise<string | undefined> | string | undefined;
 	run(context: ScenarioContext): Promise<ScenarioOutcome>;
 }
 
@@ -39,7 +46,7 @@ export interface ScenarioContext {
 	configure(patch: Record<string, unknown>): void;
 	manager(): PiBrowserManager;
 	/** Jev policy backed by a scripted text helper, so no pi model is required. */
-	jev(answerFor: (goal: string) => string | null): JevPolicy;
+	jev(answerFor: (goal: string) => string | null, rules?: string): JevPolicy;
 	outputDir: string;
 	hasCredentials: boolean;
 }
@@ -120,9 +127,10 @@ export async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
 			managers.push(manager);
 			return manager;
 		},
-		jev(answerFor) {
+		jev(answerFor, rules) {
 			const settings = modelSettings();
 			return createJevPolicy({
+				rules,
 				credentials: process.env.TYPESAFE_API_KEY
 					? undefined
 					: settings.typesafe
@@ -148,6 +156,19 @@ export async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
 	};
 
 	try {
+		const reason = await scenario.skip?.(context);
+		if (reason)
+			return {
+				id: scenario.id,
+				tier: scenario.tier,
+				category: scenario.category,
+				title: scenario.title,
+				status: "skipped",
+				checks: [],
+				metrics: {},
+				elapsedMs: Date.now() - started,
+				error: reason,
+			};
 		const outcome = await scenario.run(context);
 		const passed = outcome.checks.every((check) => check.passed);
 		return {
