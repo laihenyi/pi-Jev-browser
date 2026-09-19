@@ -3,18 +3,35 @@
   "version": "0.1.0",
   "description": "Browser automation tools for pi: Jev (TypeSafe System One) chooses each action in a bounded DOM loop, with a deterministic selector layer for precise work.",
   "license": "Apache-2.0",
-  "private": true,
   "type": "module",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/laihenyi/pi-Jev-browser.git"
   },
+  "homepage": "https://github.com/laihenyi/pi-Jev-browser#readme",
+  "bugs": {
+    "url": "https://github.com/laihenyi/pi-Jev-browser/issues"
+  },
   "keywords": [
+    "pi-package",
     "pi-extension",
     "browser-automation",
     "playwright",
     "agent",
     "jev"
+  ],
+  "files": [
+    "index.ts",
+    "src/",
+    "benchmarks/README.md",
+    "benchmarks/run.ts",
+    "benchmarks/lib/",
+    "benchmarks/scenarios/",
+    "test/",
+    "pi-jev-browser.config.example.json",
+    "README.md",
+    "LICENSE",
+    "tsconfig.json"
   ],
   "pi": {
     "extensions": [
@@ -30,6 +47,11 @@
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0",
     "playwright": "^1.58.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.85.1",

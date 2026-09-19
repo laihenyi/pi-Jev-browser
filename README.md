@@ -11,9 +11,37 @@ the text helper changed. See [Differences from the Cline plugin](#differences-fr
 
 ## Install
 
-This directory is already a pi extension: `~/.pi/agent/extensions/pi-Jev-browser/`
-is auto-discovered, so restarting pi (or `/reload`) is enough. Dependencies are
-installed with:
+### From npm
+
+```bash
+pi install npm:pi-jev-browser
+```
+
+Pi installs the package under `~/.pi/agent/npm/` and reads this manifest:
+
+```json
+"pi": { "extensions": ["./index.ts"] }
+```
+
+Installing pulls in `playwright` and `@typesafe-ai/sdk`, and Playwright's own
+install step downloads Chromium. That download is roughly 150 MB, so the first
+install takes a moment. `typebox`, `@earendil-works/pi-ai`, and
+`@earendil-works/pi-coding-agent` are `peerDependencies` because pi provides
+them as virtual modules, so nothing is bundled twice.
+
+### From a git checkout or a local directory
+
+```bash
+pi install git:github.com/laihenyi/pi-Jev-browser            # latest main
+pi install git:github.com/laihenyi/pi-Jev-browser@v0.1.0    # a pinned tag
+pi install /absolute/path/to/pi-Jev-browser                 # a working copy
+```
+
+### Auto-discovery in `~/.pi/agent/extensions`
+
+A checkout placed at `~/.pi/agent/extensions/pi-Jev-browser/` is discovered
+automatically, which is how this repository is used during development. Restart
+pi (or `/reload`) after changing it, and install its dependencies once:
 
 ```bash
 cd ~/.pi/agent/extensions/pi-Jev-browser
