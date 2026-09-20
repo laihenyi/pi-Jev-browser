@@ -321,3 +321,102 @@ test("a target covered after the observation names what intercepted the pointer"
 		await browser.close();
 	}
 });
+
+test("controls and text inside open shadow roots are observed and acted on", async () => {
+	const browser = await launchTestBrowser();
+	try {
+		const page = await browser.newPage();
+		await page.setContent(
+			'<p>Light text</p><div id="host"></div><div id="nested"></div><div id="closed"></div><button>Light button</button>',
+		);
+		await page.evaluate(() => {
+			const host = document.querySelector("#host")!.attachShadow({ mode: "open" });
+			host.innerHTML =
+				'<p>Shadow text</p><button onclick="this.textContent=\'Shadow clicked\'">Shadow button</button>' +
+				'<span id="lbl">Shadow field</span><input aria-labelledby="lbl">';
+			// A shadow root inside a shadow root, as component libraries produce.
+			const outer = document.querySelector("#nested")!.attachShadow({ mode: "open" });
+			outer.innerHTML = "<x-inner></x-inner>";
+			const inner = outer.querySelector("x-inner")!.attachShadow({ mode: "open" });
+			inner.innerHTML = '<button onclick="window.__deep=true">Deep button</button>';
+			// A closed root is not reachable from outside; its control must not be offered.
+			const closed = document.querySelector("#closed")!.attachShadow({ mode: "closed" });
+			closed.innerHTML = "<button>Closed button</button><p>Closed text</p>";
+		});
+		const snapshot = await observe(page);
+		try {
+			const labels = snapshot.data.targets.map((target) => `${target.operation}:${target.label}`);
+			assert.ok(labels.includes("CLICK:Light button"), labels.join());
+			assert.ok(labels.includes("CLICK:Shadow button"), labels.join());
+			assert.ok(labels.includes("CLICK:Deep button"), labels.join());
+			// aria-labelledby resolves inside the shadow tree the input lives in.
+			assert.ok(labels.includes("TYPE_TEXT:Shadow field"), labels.join());
+			assert.equal(labels.some((label) => label.includes("Closed button")), false, labels.join());
+			assert.match(snapshot.data.text, /Light text/);
+			assert.match(snapshot.data.text, /Shadow text/);
+			assert.doesNotMatch(snapshot.data.text, /Closed text/);
+
+			const signal = new AbortController().signal;
+			const shadowButton = snapshot.data.targets.find((target) => target.label === "Shadow button")!;
+			await snapshot.execute("CLICK", shadowButton, undefined, signal);
+			assert.equal(
+				await page.evaluate(() => document.querySelector("#host")!.shadowRoot!.querySelector("button")!.textContent),
+				"Shadow clicked",
+			);
+		} finally {
+			await snapshot.dispose();
+		}
+		// A fresh observation is needed after the click changed the label; type and click deep.
+		const again = await observe(page);
+		try {
+			const signal = new AbortController().signal;
+			const field = again.data.targets.find((target) => target.operation === "TYPE_TEXT" && target.label === "Shadow field")!;
+			await again.execute("TYPE_TEXT", field, "typed into shadow", signal);
+			assert.equal(
+				await page.evaluate(() => document.querySelector("#host")!.shadowRoot!.querySelector("input")!.value),
+				"typed into shadow",
+			);
+		} finally {
+			await again.dispose();
+		}
+		const third = await observe(page);
+		try {
+			const deep = third.data.targets.find((target) => target.label === "Deep button")!;
+			// The typed value is now part of the observed state, as it is for light DOM.
+			assert.equal(third.data.targets.find((target) => target.label === "Shadow field")?.value, "typed into shadow");
+			await third.execute("CLICK", deep, undefined, new AbortController().signal);
+			assert.equal(await page.evaluate(() => (window as unknown as { __deep?: boolean }).__deep), true);
+		} finally {
+			await third.dispose();
+		}
+	} finally {
+		await browser.close();
+	}
+});
+
+test("a shadow-DOM overlay covering a light-DOM target is named as the cover", async () => {
+	const browser = await launchTestBrowser();
+	try {
+		const page = await browser.newPage();
+		await page.setContent('<button id="buy">Buy</button><div id="banner"></div>');
+		const snapshot = await observe(page);
+		try {
+			const buy = snapshot.data.targets.find((target) => target.label === "Buy")!;
+			// The banner appears after the observation, inside a shadow root.
+			await page.evaluate(() => {
+				const root = document.querySelector("#banner")!.attachShadow({ mode: "open" });
+				root.innerHTML =
+					'<div role="dialog" aria-label="We use cookies" style="position:fixed;inset:0;background:#fff8"></div>';
+			});
+			await assert.rejects(
+				snapshot.execute("CLICK", buy, undefined, new AbortController().signal),
+				(error: unknown) =>
+					error instanceof StaleObservationError && /covered by dialog labelled "We use cookies"/.test(error.message),
+			);
+		} finally {
+			await snapshot.dispose();
+		}
+	} finally {
+		await browser.close();
+	}
+});

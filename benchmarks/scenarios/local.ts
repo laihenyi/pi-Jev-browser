@@ -362,6 +362,59 @@ export const localScenarios: Scenario[] = [
 		},
 	},
 	{
+		id: "loop-shadow-dom",
+		tier: "local",
+		category: "capability",
+		title: "A control inside an open shadow root is observed, clicked and its effect read back",
+		notes:
+			"Regression for the shadow-DOM blind spot: target collection used querySelectorAll over the light DOM, so a web component's button was never offered and its text never read. The policy is scripted; the click's effect is verified from the page, and the shadow text must appear in the observation both before and after. A closed root's control must not be offered, because it cannot be reached.",
+		async run(context) {
+			const manager = context.manager();
+			const host = { sessionId: "bench-shadow" };
+			await manager.run(
+				{ url: `${context.fixtures.url}/shadow`, goal: "Open the shadow fixture." },
+				host,
+				idlePolicy,
+			);
+			const { page } = sessionOf(manager, host);
+			const seen: Array<{ labels: string[]; text: string }> = [];
+			const result = await runJev(
+				{ goal: "Activate the widget.", maxSteps: 3 },
+				{
+					driver: browserDriver(() => page),
+					policy: {
+						async choose(observation) {
+							seen.push({ labels: observation.targets.map((target) => target.label), text: observation.text });
+							if (seen.length === 1)
+								return {
+									operation: "CLICK",
+									target: observation.targets.find((target) => target.label === "Activate widget"),
+								} as never;
+							return { operation: "DONE" } as never;
+						},
+						async text() {
+							return { text: null };
+						},
+					},
+				},
+			);
+			const activated = await page.evaluate(
+				() => (window as unknown as { __widgetActivated?: boolean }).__widgetActivated === true,
+			);
+			return {
+				checks: [
+					check("the shadow button was offered as a target", seen[0]?.labels.includes("Activate widget") ?? false, JSON.stringify(seen[0]?.labels)),
+					check("the closed root's button was not offered", !(seen[0]?.labels ?? []).some((label) => /Closed vault/.test(label)), JSON.stringify(seen[0]?.labels)),
+					check("the shadow text was observed before the click", /Shadow status: idle/.test(seen[0]?.text ?? ""), seen[0]?.text),
+					check("the click reached the component", activated, String(activated)),
+					check("the shadow text was observed after the click", /Shadow status: activated/.test(result.page?.text ?? ""), result.page?.text),
+					check("the run ended with DONE", result.stopReason === "model_done", result.stopReason),
+				],
+				metrics: { decisions: seen.length },
+			};
+		},
+	},
+	{
 		id: "loop-no-progress",
 		tier: "local",
 		category: "regression",

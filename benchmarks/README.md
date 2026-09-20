@@ -50,6 +50,7 @@ config file.
 | `session-profile` | regression | A cookie with an expiry survives a browser restart in the same session. |
 | `loop-scroll-oscillation` | regression | Alternating `SCROLL_UP`/`SCROLL_DOWN` stops the loop after five scrolls instead of burning the step budget. |
 | `loop-no-progress` | regression | Three different inert actions stop the loop as `no_progress`. |
+| `loop-shadow-dom` | capability | A web component's button inside an open shadow root is offered, clicked, and its effect read back from the shadow text; a closed root's button is not offered. |
 
 ### `model` — real Jev decisions
 
@@ -219,6 +220,9 @@ Other things the suite does **not** measure:
 
 - **Date pickers and multi-step form entry.** The live flight scenarios use the URL
   shortcut, which skips the form.
+- **Closed shadow roots.** Open shadow roots are walked (`loop-shadow-dom`); a closed
+  root cannot be reached from outside the component, so its controls and text are
+  not observed, and no scenario pretends otherwise.
 - **iframe content.** No scenario expects the automatic loop to read frame content;
   `manual-frame-audit` only measures what a coordinate click does.
 - **Purchase paths.** No scenario clicks a booking, checkout, or payment control.

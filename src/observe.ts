@@ -66,6 +66,46 @@ async function observeDocument(page: Page) {
 	const handle = await page.evaluateHandle(() => {
 		const selector =
 			'label[for],a[href],button,input,textarea,select,summary,[contenteditable="true"],[role="button"],[role="link"],[role="option"],[role="tab"],[role="checkbox"],[role="radio"],[role="switch"],[role="menuitem"],[role="combobox"],[role="gridcell"],[role="menuitemradio"],[role="textbox"],[role="searchbox"],[role="spinbutton"]';
+		/**
+		 * Open shadow roots are part of what the user sees, so their controls and
+		 * text are part of what the loop sees. `querySelectorAll` stops at a shadow
+		 * boundary, so every query goes through this walk instead: light DOM first,
+		 * then each open shadow root in document order. Closed roots cannot be
+		 * reached from outside and remain a documented limit.
+		 */
+		const deepQuery = <T extends Element = HTMLElement>(
+			selector: string,
+			root: ParentNode = document,
+		): T[] => {
+			const found: T[] = [];
+			const walk = (node: ParentNode) => {
+				found.push(...node.querySelectorAll<T>(selector));
+				for (const host of node.querySelectorAll<Element>("*"))
+					if (host.shadowRoot) walk(host.shadowRoot);
+			};
+			walk(root);
+			return found;
+		};
+		/** The deepest element at a point, descending through open shadow roots. */
+		const deepHit = (x: number, y: number): Element | null => {
+			let hit = document.elementFromPoint(x, y);
+			while (hit?.shadowRoot) {
+				const inner = hit.shadowRoot.elementFromPoint(x, y);
+				if (!inner || inner === hit) break;
+				hit = inner;
+			}
+			return hit;
+		};
+		/** `contains` across shadow boundaries: a hit inside a host's shadow tree counts. */
+		const encloses = (ancestor: Element | null | undefined, node: Element | null) => {
+			if (!ancestor) return false;
+			for (let current: Node | null = node; current; ) {
+				if (current === ancestor) return true;
+				const parent: Node | null = current.parentNode;
+				current = parent instanceof ShadowRoot ? parent.host : parent;
+			}
+			return false;
+		};
 		const visible = (e: HTMLElement) => {
 			const r = e.getBoundingClientRect();
 			return (
@@ -81,13 +121,10 @@ async function observeDocument(page: Page) {
 		};
 		const receivesPointer = (e: HTMLElement) => {
 			const r = e.getBoundingClientRect();
-			const hit = document.elementFromPoint(
-				r.x + r.width / 2,
-				r.y + r.height / 2,
-			);
+			const hit = deepHit(r.x + r.width / 2, r.y + r.height / 2);
 			return (
-				e.contains(hit) ||
-				(e instanceof HTMLLabelElement && !!e.control?.contains(hit))
+				encloses(e, hit) ||
+				(e instanceof HTMLLabelElement && encloses(e.control, hit))
 			);
 		};
 
@@ -100,7 +137,7 @@ async function observeDocument(page: Page) {
 				above: [] as string[],
 				below: [] as string[],
 			};
-			for (const e of document.querySelectorAll<HTMLElement>(selector)) {
+			for (const e of deepQuery(selector)) {
 				if (targets.length >= 200) break;
 				const rect = e.getBoundingClientRect();
 				const associated = e instanceof HTMLLabelElement ? e.control : e;
@@ -155,7 +192,12 @@ async function observeDocument(page: Page) {
 					e.getAttribute("aria-label") ||
 					(e.getAttribute("aria-labelledby") || "")
 						.split(/\s+/)
-						.map((id) => document.getElementById(id)?.textContent || "")
+						.map(
+							(id) =>
+								// Ids are scoped to the tree the element lives in.
+								(e.getRootNode() as Document | ShadowRoot).getElementById(id)
+									?.textContent || "",
+						)
 						.join(" ")
 						.trim() ||
 					Array.from(input.labels || [])
@@ -225,49 +267,64 @@ async function observeDocument(page: Page) {
 				}
 			}
 			const words: string[] = [];
-			const walker = document.createTreeWalker(
-				document.body,
-				NodeFilter.SHOW_TEXT,
-			);
 			const range = document.createRange();
 			let length = 0;
-			while (length < 6000) {
-				const node = walker.nextNode();
-				if (!node) break;
-				const parent = node.parentElement;
-				const text = node.textContent?.trim();
-				if (
-					!text ||
-					!parent ||
-					parent.closest(
-						'script,style,noscript,[inert],[aria-hidden="true"]',
-					) ||
-					!parent.checkVisibility({
-						checkOpacity: true,
-						checkVisibilityCSS: true,
-					})
-				)
-					continue;
-				range.selectNodeContents(node);
-				const r = range.getBoundingClientRect();
-				if (
-					r.width &&
-					r.height &&
-					r.bottom > 0 &&
-					r.top < innerHeight &&
-					r.right > 0 &&
-					r.left < innerWidth
-				) {
-					words.push(text);
-					length += text.length;
+			// A TreeWalker does not enter shadow roots, so a host is a cue to walk its
+			// root before continuing; the shadow text lands where the host is.
+			const readText = (root: Node) => {
+				const walker = document.createTreeWalker(
+					root,
+					NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
+					{
+						acceptNode: (node) =>
+							node.nodeType === Node.TEXT_NODE ||
+							(node as Element).shadowRoot
+								? NodeFilter.FILTER_ACCEPT
+								: NodeFilter.FILTER_SKIP,
+					},
+				);
+				while (length < 6000) {
+					const node = walker.nextNode();
+					if (!node) break;
+					if (node.nodeType === Node.ELEMENT_NODE) {
+						const shadow = (node as Element).shadowRoot;
+						if (shadow) readText(shadow);
+						continue;
+					}
+					const parent = node.parentElement;
+					const text = node.textContent?.trim();
+					if (
+						!text ||
+						!parent ||
+						parent.closest(
+							'script,style,noscript,[inert],[aria-hidden="true"]',
+						) ||
+						!parent.checkVisibility({
+							checkOpacity: true,
+							checkVisibilityCSS: true,
+						})
+					)
+						continue;
+					range.selectNodeContents(node);
+					const r = range.getBoundingClientRect();
+					if (
+						r.width &&
+						r.height &&
+						r.bottom > 0 &&
+						r.top < innerHeight &&
+						r.right > 0 &&
+						r.left < innerWidth
+					) {
+						words.push(text);
+						length += text.length;
+					}
 				}
-			}
+			};
+			readText(document.body);
 			const data: Observation = {
 				offscreenControls,
-				selectedOptions: Array.from(
-					document.querySelectorAll<HTMLInputElement>(
-						"input[type=radio]:checked,input[type=checkbox]:checked",
-					),
+				selectedOptions: deepQuery<HTMLInputElement>(
+					"input[type=radio]:checked,input[type=checkbox]:checked",
 				)
 					.filter((e) => !e.closest('[aria-hidden="true"],[inert]'))
 					.slice(0, 50)
@@ -304,11 +361,7 @@ async function observeDocument(page: Page) {
 				]),
 			]);
 			const formState = JSON.stringify(
-				Array.from(
-					document.querySelectorAll(
-						'input,textarea,select,[contenteditable="true"]',
-					),
-				).map((e) => [
+				deepQuery('input,textarea,select,[contenteditable="true"]').map((e) => [
 					(e as HTMLInputElement).value,
 					(e as HTMLInputElement).checked,
 					e.getAttribute("aria-checked"),
@@ -318,7 +371,7 @@ async function observeDocument(page: Page) {
 			return { nodes, data, signature, formState, links };
 		};
 		const original = read();
-		return { original, read };
+		return { original, read, deepHit, encloses };
 	});
 	try {
 		const data = await handle.evaluate((h) => h.original.data);
@@ -401,7 +454,7 @@ async function observeDocument(page: Page) {
 							// is now covering it. Say what, so the next step is a dismissal rather than
 							// a guess.
 							const rect = node.getBoundingClientRect();
-							const blocker = document.elementFromPoint(
+							const blocker = h.deepHit(
 								rect.x + rect.width / 2,
 								rect.y + rect.height / 2,
 							);
@@ -418,18 +471,15 @@ async function observeDocument(page: Page) {
 						)
 							throw new Error("Page changed; target or form state changed.");
 						const r = node.getBoundingClientRect();
-						const hit = document.elementFromPoint(
-							r.x + r.width / 2,
-							r.y + r.height / 2,
-						);
+						const hit = h.deepHit(r.x + r.width / 2, r.y + r.height / 2);
 						if (
-							!node.contains(hit) &&
-							!(node instanceof HTMLLabelElement && node.control?.contains(hit))
+							!h.encloses(node, hit) &&
+							!(node instanceof HTMLLabelElement && h.encloses(node.control, hit))
 						) {
 							throw new Error(`Observed target is covered by ${cover(hit)}.`);
 						}
 						return node instanceof HTMLLabelElement &&
-							node.control?.contains(hit)
+							h.encloses(node.control, hit)
 							? node.control
 							: node;
 					}, target)

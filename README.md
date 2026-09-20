@@ -174,7 +174,10 @@ run. Stale decisions are re-evaluated within a budget of twice `maxSteps`;
 executed mutations are never retried.
 
 The loop retains observed DOM nodes and checks page semantics, node identity, and
-occlusion before acting. Frames, shadow DOM, canvas controls, nested scrolling,
+occlusion before acting. Open shadow roots are walked, so a web component's
+controls and text are observed and acted on like light DOM (hit-testing descends
+into the shadow tree, and a shadow-rendered overlay that covers a target is named
+as the cover). Closed shadow roots, frames, canvas controls, nested scrolling,
 uploads, and arbitrary keyboard widgets are outside this DOM loop; use
 `jev_actions` where appropriate. Model context is capped at 200 action targets
 and 6,000 visible text characters, plus 50 selected options and up to 50 offscreen

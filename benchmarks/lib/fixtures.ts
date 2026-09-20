@@ -59,6 +59,28 @@ const GATE = page(
 <form action="/gate/verify" method="get"><button type="submit">Verify and continue</button></form>`,
 );
 
+/**
+ * A page whose only useful control lives inside an open shadow root, next to a
+ * closed root that must stay invisible. Component libraries render like this, and a
+ * loop that stops at shadow boundaries sees a page with nothing to click.
+ */
+const SHADOW = page(
+	"Shadow widget",
+	`<p>The control below is rendered by a web component.</p>
+<x-widget id="widget"></x-widget>
+<x-vault id="vault"></x-vault>
+<script>
+  const open = document.getElementById("widget").attachShadow({ mode: "open" });
+  open.innerHTML = '<p>Shadow status: idle</p><button id="go">Activate widget</button>';
+  open.getElementById("go").addEventListener("click", () => {
+    open.querySelector("p").textContent = "Shadow status: activated";
+    window.__widgetActivated = true;
+  });
+  const closed = document.getElementById("vault").attachShadow({ mode: "closed" });
+  closed.innerHTML = '<button>Closed vault button</button>';
+</script>`,
+);
+
 export async function startFixtures(): Promise<FixtureServer> {
 	const requests: string[] = [];
 	const server: Server = createServer((request, response) => {
@@ -96,6 +118,10 @@ export async function startFixtures(): Promise<FixtureServer> {
 		}
 		if (path === "/gate") {
 			response.end(GATE);
+			return;
+		}
+		if (path === "/shadow") {
+			response.end(SHADOW);
 			return;
 		}
 		if (path === "/outbound") {
