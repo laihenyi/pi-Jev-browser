@@ -98,36 +98,48 @@ Two things the tier learned about driving a desktop, both now fixed in the drive
 
 ## Measured results
 
-Latest full run on 2026-09-19, macOS, Chromium 1243, `jev-1.13.0`.
+Latest full run on 2026-09-20, macOS, Chromium 1243, `jev-1.13.0`, all four tiers:
 
 ```
-scenario                     tier   category    result  time
-manual-selectors             local  regression  PASS    2.7s
-manual-extract               local  capability  PASS    0.8s
-manual-frame-audit           local  regression  PASS    2.3s
-manual-popup-stay            local  regression  PASS    1.1s
-manual-deny-origin           local  regression  PASS    0.0s
-session-profile              local  regression  PASS    1.7s
-loop-scroll-oscillation      local  regression  PASS    1.8s
-loop-no-progress             local  regression  PASS    1.9s
-jev-header-enumeration       model  regression  PASS    5.3s
-jev-form-fill                model  capability  PASS    2.2s
-jev-verification-gate        model  limitation  GAP     2.6s
-live-flight-month-sweep      live   capability  PASS    8.9s
-live-flight-nonstop-filter   live   capability  PASS    16.2s
-live-pilotrun-header         live   capability  PASS    9.1s
+scenario                          tier     category    result  time
+manual-selectors                  local    regression  PASS    2.9s
+manual-extract                    local    capability  PASS    0.8s
+manual-frame-audit                local    regression  PASS    2.3s
+manual-popup-stay                 local    regression  PASS    1.1s
+manual-deny-origin                local    regression  PASS    0.0s
+session-profile                   local    regression  PASS    1.7s
+loop-scroll-oscillation           local    regression  PASS    1.6s
+loop-shadow-dom                   local    capability  PASS    1.6s
+loop-no-progress                  local    regression  PASS    2.0s
+jev-header-enumeration            model    regression  PASS    5.0s
+jev-form-fill                     model    capability  PASS    2.3s
+jev-verification-gate             model    regression  PASS    0.4s
+live-flight-month-sweep           live     capability  PASS    8.9s
+live-flight-nonstop-filter        live     capability  PASS   16.4s
+live-pilotrun-header              live     capability  PASS    9.3s
+desktop-calculator-deterministic  desktop  capability  PASS    4.8s
+desktop-repeat-guard              desktop  regression  PASS    3.7s
+desktop-calculator-entry          desktop  capability  PASS    9.4s
+desktop-goal-needs-a-plan         desktop  capability  PASS   12.4s
+desktop-textedit-deterministic    desktop  capability  PASS    1.1s
+desktop-textedit-entry            desktop  capability  PASS    2.3s
 ```
+
+21 passed, 0 failed, 0 skipped. No scenario is reported as GAP: the two that were
+(`jev-verification-gate`, `desktop-goal-needs-a-plan`) are described below.
 
 Selected metrics from that run:
 
 | Metric | Value |
 | --- | --- |
-| Lowest TPE→LON fare, 2026-10 / 2026-11 / 2026-12 | `$1,026` / `$1,115` / **`$928`** |
+| Lowest TPE→LON fare, 2026-10 / 2026-11 / 2026-12 | `$1,026` / `$1,157` / **`$928`** |
 | Cheapest December itinerary | Etihad, 25 hr 25 min, TPE–LHR, 1 stop AUH |
-| Nonstop-filtered fare, same search | `$1,124` (two-step selector click: 3,461 ms) |
-| `live-pilotrun-header` | 10 executed steps, **10 distinct targets**, 0 stale observations, loop 8,122 ms |
-| `jev-header-enumeration` decision latency | median 270 ms |
-| `live-pilotrun-header` decision latency | median 266 ms |
+| Nonstop-filtered fare, same search | `$1,124` (two-step selector click: 3,495 ms) |
+| `live-pilotrun-header` | 10 executed steps, **10 distinct targets**, 0 stale observations, loop 8,251 ms |
+| `jev-header-enumeration` decision latency | median 278 ms |
+| `live-pilotrun-header` decision latency | median 258 ms |
+| `desktop-goal-needs-a-plan` | 10 plan steps, 10 executed steps, `model_done`, display `7,006,652` |
+| `desktop-textedit-entry` | 1 executed step, `model_done`, document equals the requested sentence |
 
 The month sweep was cross-checked against an earlier TWD measurement of the same
 routes (NT$32,604 / NT$35,408 / NT$29,482), which matches at the prevailing rate.
