@@ -425,3 +425,41 @@ test("a human-verification gate ends the run before the policy is consulted", as
 		[["REVIEW", "decision", "verification_gate"]],
 	);
 });
+
+test("Return in a field without a confirm control is handed to the user before it runs", async () => {
+	const composer: ObservedTarget = { id: "3", operation: "TYPE_TEXT", label: "Message", value: "hello", role: "AXTextArea" };
+	const submit: ObservedTarget = { id: "3:return", operation: "CLICK", label: "⏎ Message", value: "hello", role: "submit" };
+	const fake = fakeDriver({ observations: [observation({ targets: [composer, submit] })] });
+	const steps: RunStepLike[] = [];
+	const result = await runJev(
+		{ goal: "Send hello" },
+		{ driver: fake.driver, policy: scripted([{ target: submit }]), onStep: async (step) => void steps.push(step) },
+	);
+	assert.equal(result.status, "needs_review");
+	assert.equal(result.stopReason, "submit_review");
+	assert.match(result.message, /⏎ Message/);
+	assert.equal(fake.executed.length, 0, "nothing was sent");
+	assert.deepEqual(
+		steps.map((step) => [step.operation, step.status, step.reason]),
+		[["CLICK", "decision", undefined], ["REVIEW", "decision", "submit_review"]],
+	);
+});
+
+test("a control that changed nothing twice is no longer offered", async () => {
+	const header = target("Alice");
+	const composer = target("Message", "TYPE_TEXT");
+	const fake = fakeDriver({ observations: [observation({ targets: [header, composer] })], advanceOnExecute: false });
+	const seen: string[][] = [];
+	const base = scripted([{ target: header }, { target: header }, { operation: "DONE" }]);
+	const policy: JevPolicy = {
+		...base,
+		async choose(data, goal, history, signal) {
+			seen.push(data.targets.map((t) => t.label));
+			return base.choose(data, goal, history, signal);
+		},
+	};
+	const result = await runJev({ goal: "Message Alice" }, { driver: fake.driver, policy });
+	assert.equal(fake.executed.length, 2);
+	assert.deepEqual(seen, [["Alice", "Message"], ["Alice", "Message"], ["Message"]], "after two inert presses the header is gone from the question");
+	assert.equal(result.stopReason, "model_done");
+});

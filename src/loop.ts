@@ -1,14 +1,23 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Usage as ModelUsage } from "@earendil-works/pi-ai";
-import { type Driver, StaleObservationError } from "./driver.ts";
+import { type Driver, type Observation, type ObservedTarget, StaleObservationError } from "./driver.ts";
 import { failureCategory, describeError } from "./errors.ts";
 import { verificationGate } from "./gate.ts";
 import { type JevPolicy, plannedGoal } from "./policy.ts";
+
+export const DEFAULT_TIMEOUT_MS = 100_000;
+export const MAX_TIMEOUT_MS = 600_000;
 
 export interface RunInput {
 	goal: string;
 	maxSteps?: number;
 	minProbability?: number;
+	/**
+	 * Wall-clock budget for the whole run. Defaults to 100 seconds, which fits a
+	 * single page or one application window; a task that waits on page loads or
+	 * a text helper on every step needs more. Capped at ten minutes.
+	 */
+	timeoutMs?: number;
 }
 export interface RunStep {
 	step: number;
@@ -33,6 +42,7 @@ export type StopReason =
 	| "model_blocked"
 	| "model_review"
 	| "verification_gate"
+	| "submit_review"
 	| "min_probability"
 	| "step_limit"
 	| "evaluation_limit"
@@ -135,8 +145,11 @@ export async function runJev(
 			minProbability > 1)
 	)
 		throw new Error("minProbability must be from 0 to 1.");
+	const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+	if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > MAX_TIMEOUT_MS)
+		throw new Error(`timeoutMs must be an integer from 1000 to ${MAX_TIMEOUT_MS}.`);
 	const signal = AbortSignal.any([
-		AbortSignal.timeout(100_000),
+		AbortSignal.timeout(timeoutMs),
 		...(options.signal ? [options.signal] : []),
 	]);
 	signal.throwIfAborted();
@@ -170,6 +183,22 @@ export async function runJev(
 	let repeatStates: string[] = [];
 	let stateRepeats = 0;
 	let identicalActions = 0;
+	const transitions = new Map<string, number>();
+	// Controls that were pressed and changed nothing, twice. A header that carries
+	// the sought name, a label that happens to be clickable: offering them again
+	// only invites the same no-op, so they leave the question for the rest of the
+	// run. Two strikes, not one, so a control that merely needed a moment to load
+	// is not written off.
+	const inertPresses = new Map<string, number>();
+	/** Consecutive non-scroll actions that changed neither the surface nor the question. */
+	let fruitless = 0;
+	const inert = new Set<string>();
+	const keyOf = (target: ObservedTarget | undefined) =>
+		target ? target.identifier || `${target.role ?? ""}|${target.label}` : "";
+	const offered = (data: Observation): Observation =>
+		inert.size === 0
+			? data
+			: { ...data, targets: data.targets.filter((t) => !inert.has(keyOf(t))) };
 	let consecutiveStale = 0;
 	let scrollDirection: string | undefined;
 	let scrollReversals = 0;
@@ -248,7 +277,7 @@ export async function runJev(
 				const decisionStarted = performance.now();
 				stage = "evaluation";
 				const decision = await policy.choose(
-					snapshot.data,
+					offered(snapshot.data),
 					goal,
 					memory.actions,
 					signal,
@@ -274,6 +303,25 @@ export async function runJev(
 						"The agent must inspect the page and handle the next action with appropriate user authorization.",
 						"model_review",
 					);
+				// Return in a field that cannot confirm through its own controls sends a
+				// message or runs a command. That is not a step the model gets to take on
+				// its own: the rules ask it to review first, and on a chat composer it
+				// pressed first and reviewed after. The loop refuses it mechanically.
+				if (decision.target?.role === "submit") {
+					await options.onStep?.({
+						step,
+						operation: "REVIEW",
+						target: decision.target.label,
+						status: "decision",
+						reason: "submit_review",
+						latencyMs: Math.round(performance.now() - decisionStarted),
+					});
+					return finish(
+						"needs_review",
+						`The next step submits ${JSON.stringify(decision.target.label)} (Return in a field with no confirm control), which sends or executes what was typed. Hand this step to the user.`,
+						"submit_review",
+					);
+				}
 				if (decision.operation === "BLOCKED")
 					return finish(
 						"blocked",
@@ -401,7 +449,16 @@ export async function runJev(
 				executed++;
 				entry.status = "executed";
 				consecutiveStale = 0;
-				const actionKey = `${decision.operation}:${decision.target?.id ?? ""}`;
+				// The guard key names the control, not its position: on a page that
+				// re-renders (a video site, a search result list) the same button gets
+				// a new index on every observation, and a guard keyed on the index
+				// would see twelve different actions where a person sees one.
+				const actionKey = `${decision.operation}:${
+					decision.target
+						? decision.target.identifier ||
+							`${decision.target.role ?? ""}|${decision.target.label}`
+						: ""
+				}`;
 				await options.onStep?.({ ...entry });
 				// Let event handlers render before the next read, without screenshot or network-idle waits.
 				await delay(
@@ -422,6 +479,19 @@ export async function runJev(
 					const pageChanged =
 						JSON.stringify(after.data) !== JSON.stringify(snapshot.data);
 					const stateKey = JSON.stringify(after.data);
+					if (decision.target && !decision.operation.startsWith("SCROLL")) {
+						const key = keyOf(decision.target);
+						const strikes = pageChanged ? 0 : (inertPresses.get(key) ?? 0) + 1;
+						inertPresses.set(key, strikes);
+						if (strikes >= 2 && !inert.has(key)) {
+							inert.add(key);
+							// Withdrawing a control changes the question even though the surface
+							// did not move, so the no-progress count starts again from here.
+							fruitless = 0;
+						}
+					}
+					if (decision.operation !== "WAIT" && !decision.operation.startsWith("SCROLL"))
+						fruitless = pageChanged ? 0 : fruitless + 1;
 					memory.actions.push({
 						action: decision.target?.label ?? decision.operation,
 						kind: decision.operation,
@@ -469,15 +539,26 @@ export async function runJev(
 							"repeated_action",
 						);
 					}
+					// A two-control cycle (tab A, tab B, tab A, ...) never repeats an action
+					// consecutively, so the guards above cannot see it. The same action
+					// landing on the same state three times is a cycle whatever else runs
+					// in between.
+					const transition = `${actionKey}\u0000${stateKey}`;
+					const seen =
+						decision.target !== undefined && !decision.operation.startsWith("SCROLL")
+							? (transitions.get(transition) ?? 0) + 1
+							: 0;
+					if (seen > 0) transitions.set(transition, seen);
+					if (seen >= MAX_STATE_REPEATS)
+						return finish(
+							"blocked",
+							`${decision.operation} on ${JSON.stringify(decision.target?.label ?? actionKey)} led to the same state ${seen} times; the run is cycling. Continue with jev_actions or revise the goal.`,
+							"repeated_action",
+						);
 					// Only state-changing actions count as progress claims. A scroll changes
 					// what the agent sees by definition, and the page text of a long document
 					// often stays identical until new content comes into view.
-					const recent = memory.actions
-						.filter(
-							(a) => a.kind !== "WAIT" && !a.kind.startsWith("SCROLL"),
-						)
-						.slice(-3);
-					if (recent.length === 3 && recent.every((a) => !a.page_changed))
+					if (fruitless >= 3)
 						return finish(
 							"blocked",
 							"Three actions produced no observable progress.",

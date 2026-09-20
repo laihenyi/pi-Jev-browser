@@ -1,5 +1,7 @@
 # Pi Jev Browser
 
+English | [繁體中文](README.zh-TW.md)
+
 A browser agent for **pi**. **Jev** (TypeSafe System One) chooses each action
 from a structured observation of the page — visible text plus addressable
 controls, never a screenshot — inside a bounded loop that knows when it is
@@ -117,10 +119,16 @@ offscreen selections), and summaries of controls above and below the viewport. I
 does not receive screenshots. The agent receives screenshots to verify outcomes.
 
 Jev chooses actions but cannot generate arbitrary text. When it chooses
-`TYPE_TEXT`, the extension calls the **active pi model** through
-`ctx.modelRegistry.complete()` to produce the field value. Set
-`textHelper.model` (or `PI_JEV_BROWSER_TEXT_MODEL`) to `"provider/modelId"` to pin a
-different model. Its token usage is reported back to pi on the tool result.
+`TYPE_TEXT`, the field value is first sought **in the goal itself**: quoted
+phrases, the goal's sentences, short runs of their words and, for a browser
+address bar, the `.com` form of each Latin word become candidates, and Jev picks
+one (or `NONE`) in a single choice question. Almost every value a run has to type
+is already written in the goal, so this path needs no second model and answers in
+well under a second. Only when Jev answers `NONE` does the extension fall back to
+the **active pi model** through `ctx.modelRegistry.complete()` to produce the
+value. Set `textHelper.model` (or `PI_JEV_BROWSER_TEXT_MODEL`) to
+`"provider/modelId"` to pin a different model. Its token usage is reported back to
+pi on the tool result.
 
 The helper is a one-line extraction, so it uses a 4,096-token budget (reasoning
 models share that budget with their thinking tokens) and two transport retries,
@@ -172,14 +180,15 @@ are `done_unverified`, `blocked`, `needs_review`, `uncertain`, `step_limit`,
 | `model_done` | Jev reported DONE; the status is `done_unverified` because a claim is not proof. |
 | `model_blocked` | Jev reported BLOCKED: no supported action can progress. |
 | `model_review` | Jev reported REVIEW: the next step needs sensitive data, submits something, or crosses a safety barrier such as a CAPTCHA. |
+| `submit_review` | The loop itself refused to press Return in a field that has no confirm control of its own (a chat composer, a command line): that sends or executes what was typed. Status is `needs_review`; the user sends. |
 | `verification_gate` | The loop itself refused a human-verification gate before asking Jev: the page text announced a challenge and a control offered to pass it. Status is `needs_review`; hand the step to the user. |
 | `min_probability` | The selected choice fell below the requested `minProbability`. |
 | `step_limit` / `evaluation_limit` | The action or evaluation budget ran out. |
 | `repeated_action` | An identical action stopped producing new state (a control cycling between states it already produced), or ran 12 times in a row as a backstop. Repeated presses that keep producing new state are allowed, because entering `111` is legitimate input. |
 | `scroll_oscillation` | `SCROLL_UP` and `SCROLL_DOWN` alternated repeatedly, a two-cycle that is not exploration. |
 | `stale_observations` | Four consecutive observations were invalidated before an action could run. |
-| `no_progress` | Three actions produced no observable change. |
-| `text_unavailable` | The pi text helper declined to produce a value, so nothing was typed. |
+| `no_progress` | Three actions produced no observable change. A control pressed twice without any change is withdrawn from the next question first, so the count starts again when the question changes; the run only stops when Jev keeps choosing fresh controls that change nothing. |
+| `text_unavailable` | Neither the goal nor the pi text helper supplied a value for the field, so nothing was typed. |
 | `cancelled` / `error` | The run was aborted, or it failed; see `failure`. |
 
 `failure.detail` is a bounded summary (`error name`, HTTP status when known)
@@ -209,8 +218,8 @@ and 6,000 visible text characters, plus 50 selected options and up to 50 offscre
 control labels in each direction. This can omit controls on dense pages.
 
 Page text and visible field values are sent to TypeSafe `api.typesafe.ai`, and the
-same content is sent to your pi model provider when a field value must be
-generated. Password and file fields are excluded, but other sensitive content is
+same content is sent to your pi model provider when a field value has to be
+generated because the goal does not contain it. Password and file fields are excluded, but other sensitive content is
 not automatically redacted. Jev is instructed to return `REVIEW` before
 consequential actions; this is model guidance, not a deterministic security
 boundary. Delegate only narrowly scoped tasks suitable for autonomous browser

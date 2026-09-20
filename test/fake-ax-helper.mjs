@@ -47,6 +47,7 @@ lines.on("line", (line) => {
 				window: "Fake window",
 				signature,
 				text: process.env.FAKE_AX_TEXT ?? "0",
+				...(process.env.FAKE_AX_WINDOW_FRAME ? { windowFrame: JSON.parse(process.env.FAKE_AX_WINDOW_FRAME) } : {}),
 				nodes,
 			});
 			return;

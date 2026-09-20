@@ -205,7 +205,7 @@ test("unoffered or malformed Jev answers fail instead of acting", async () => {
 	);
 });
 
-test("text decisions are parsed and their helper usage returned", async () => {
+test("generator text is parsed and its usage returned when Jev finds no candidate", async () => {
 	const policy = createJevPolicy({
 		text: async () => ({
 			text: '{"text":"cats"}',
@@ -220,7 +220,7 @@ test("text decisions are parsed and their helper usage returned", async () => {
 		}),
 		client: createTypeSafeClient(
 			{ apiKey: "key", baseUrl: "https://typesafe.example.test", model: "m" },
-			{ fetch: async () => Response.json({ model: "m", answers: {}, usage: { input_tokens: 1, output_tokens: 0 } }) },
+			{ fetch: async () => Response.json({ model: "m", answers: { text: { type: "choice", choice: "NONE", confidence: 1, probabilities: { NONE: 1 } } }, usage: { input_tokens: 1, output_tokens: 0 } }) },
 		),
 	});
 	const generated = await policy.text(
@@ -459,4 +459,62 @@ test("planning yields no plan when the model declines, never converges, or plans
 test("planning is off unless asked for", () => {
 	const policy = createJevPolicy({ text: async () => ({ text: "x" }), client: planningClient([]).client });
 	assert.equal(policy.plan, undefined);
+});
+
+test("field text comes from the goal as candidates for Jev to choose from", async () => {
+	const { textCandidates, buildTextQuestion } = await import("../src/policy.ts");
+	const goal = "開啟 Safari 視窗。點選 YouTube。找尋一支有關於 TMB 環山路徑的介紹影片。";
+	const addressBar = textCandidates(goal, {
+		label: "智慧型搜尋欄位",
+		identifier: "WEB_BROWSER_ADDRESS_AND_SEARCH",
+		value: "https://example.test",
+	});
+	assert.deepEqual(addressBar, ["safari.com", "youtube.com", "tmb.com"], "an address bar is offered only the sites the goal names, never the search phrase");
+	assert.deepEqual(textCandidates("Open https://pi.dev/packages then read", { label: "Address", value: "" }), ["open.com", "https://pi.dev/packages", "then.com", "read.com"]);
+	assert.ok(textCandidates("搜尋 環山路徑", { label: "網址", value: "" }).includes("環山路徑"), "a goal without a site name falls through to the general candidates");
+	const searchBox = textCandidates(goal, { label: "搜尋", value: "" });
+	assert.ok(!searchBox.some((c) => c.endsWith(".com")), "only an address bar gets .com forms");
+	assert.ok(searchBox.includes("TMB 環山路徑的介紹影片"), "runs of tokens inside a sentence are offered");
+	assert.ok(searchBox.includes("點選 YouTube") && searchBox.includes("YouTube"));
+	const quoted = textCandidates('Search for "wool socks" and open the first result', { label: "Search", value: "" });
+	assert.equal(quoted[0], "wool socks", "a quoted phrase is the first candidate");
+	assert.ok(textCandidates("Type it", { label: "Search", value: "Type it" }).indexOf("Type it") < 0, "the current value is not offered again");
+	const question = buildTextQuestion(observation, goal, observation.targets[0], searchBox);
+	assert.equal(Object.keys(question.text.criteria)[0], "NONE");
+	assert.equal(Object.keys(question.text.criteria).length, searchBox.length + 1);
+});
+
+test("policy.text asks Jev to choose a candidate and only falls back to the generator on NONE", async () => {
+	const answers: string[] = [];
+	const clientAnswering = (choice: string) =>
+		createTypeSafeClient(
+			{ apiKey: "key", baseUrl: "https://typesafe.example.test", model: "m" },
+			{
+				fetch: async (_url, init) => {
+					const body = JSON.parse(String(init?.body));
+					answers.push(Object.keys(body.questions.text.criteria).join(","));
+					return Response.json({ model: "m", answers: { text: { type: "choice", choice, confidence: 0.9, probabilities: { [choice]: 0.9 } } }, usage: { input_tokens: 1, output_tokens: 0 } });
+				},
+			},
+		);
+	const field = { id: "9", operation: "TYPE_TEXT" as const, label: "Search", value: "" };
+	const signal = new AbortController().signal;
+	let generatorCalls = 0;
+	const generator = async () => {
+		generatorCalls++;
+		return { text: '{"text":"from generator"}' };
+	};
+	const chosen = await createJevPolicy({ client: clientAnswering("TEXT:0"), text: generator }).text(observation, 'Search for "wool socks"', field, [], signal);
+	assert.equal(chosen.text, "wool socks");
+	assert.equal(generatorCalls, 0, "Jev answered, the generator is not consulted");
+	assert.match(answers[0], /^NONE,TEXT:0/);
+	const fallback = await createJevPolicy({ client: clientAnswering("NONE"), text: generator }).text(observation, "Write a poem", field, [], signal);
+	assert.equal(fallback.text, "from generator");
+	assert.equal(generatorCalls, 1);
+	const none = await createJevPolicy({ client: clientAnswering("NONE") }).text(observation, "Write a poem", field, [], signal);
+	assert.equal(none.text, null, "without a generator, NONE means nothing is typed");
+	await assert.rejects(
+		createJevPolicy({ client: clientAnswering("TEXT:99") }).text(observation, "Search for socks", field, [], signal),
+		/unoffered text/,
+	);
 });

@@ -13,6 +13,7 @@
 import ApplicationServices
 import AppKit
 import Foundation
+import Vision
 
 // MARK: - accessibility helpers
 
@@ -59,7 +60,8 @@ func frame(_ element: AXUIElement) -> (x: Int, y: Int, w: Int, h: Int)? {
 /// Calculator publishes nothing in AXTitle and everything in AXDescription, so a
 /// driver that only read AXTitle would see 25 unnamed buttons.
 func accessibleName(_ element: AXUIElement) -> String {
-    for key in [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute] {
+    // A web search box often has only a placeholder ("搜尋"); it is the name a person reads.
+    for key in [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute, "AXPlaceholderValue"] {
         if let value = text(element, key)?.trimmingCharacters(in: .whitespacesAndNewlines),
            !value.isEmpty {
             return value
@@ -68,8 +70,22 @@ func accessibleName(_ element: AXUIElement) -> String {
     return ""
 }
 
+/// The accessibility root of one application. A browser opening a tab or loading a
+/// page can take longer than the default one-second reply window, and then an action
+/// that did land is reported as AXError -25204 (cannot complete); five seconds is
+/// generous for an app that is merely busy and still fails fast for one that hung.
+func applicationElement(_ app: NSRunningApplication) -> AXUIElement {
+    let element = AXUIElementCreateApplication(app.processIdentifier)
+    AXUIElementSetMessagingTimeout(element, 5.0)
+    return element
+}
+
 func application(bundleId: String) -> NSRunningApplication? {
-    NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleId }
+    // This helper is a resident process without a run loop, so the workspace's
+    // cached list is not refreshed; ask Launch Services directly instead, or an
+    // application started after the helper is never seen.
+    NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first
+        ?? NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleId }
 }
 
 func frontmost() -> NSRunningApplication? {
@@ -89,6 +105,11 @@ struct Node {
     let enabled: Bool
     let actions: [String]
     let frame: (x: Int, y: Int, w: Int, h: Int)?
+
+    func renamed(_ name: String) -> Node {
+        Node(element: element, index: index, role: role, subrole: subrole, name: name, value: value,
+             identifier: identifier, enabled: enabled, actions: actions, frame: frame)
+    }
 }
 
 let pressableRoles: Set<String> = [
@@ -111,27 +132,83 @@ let windowControlSubroles: Set<String> = [
 
 func isInteractive(_ role: String, _ subrole: String, _ actions: [String]) -> Bool {
     if windowControlSubroles.contains(subrole) { return false }
+    // SwiftUI attaches AXPress to every static text. A label is content, not a
+    // control: offering it as a target hides the window text the decision layer
+    // needs and buries the real controls among dozens of unnamed "buttons".
+    if role == "AXStaticText" { return false }
     if actions.contains(kAXPressAction) { return true }
     if pressableRoles.contains(role) { return true }
     if textRoles.contains(role) { return true }
     return actions.contains("AXConfirm") || actions.contains("AXPick")
 }
 
+/// The window a person would call "the window": the focused one, else the main
+/// one, else the first standard window. Menu-bar apps keep invisible helper
+/// windows (status item, HUD) in the window list, often ahead of the real one,
+/// so `windows.first` can pick a window nobody sees.
+func primaryWindow(_ appElement: AXUIElement) -> AXUIElement? {
+    if let focused = attribute(appElement, kAXFocusedWindowAttribute) {
+        return (focused as! AXUIElement)
+    }
+    if let main = attribute(appElement, kAXMainWindowAttribute) {
+        return (main as! AXUIElement)
+    }
+    let windows = (attribute(appElement, kAXWindowsAttribute) as? [AXUIElement]) ?? []
+    return windows.first { text($0, kAXSubroleAttribute) == "AXStandardWindow" } ?? windows.first
+}
+
+/// Posts a Return key press to one process (key code 36).
+func pressReturn(pid: pid_t) {
+    guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: true),
+          let up = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: false)
+    else { return }
+    down.postToPid(pid)
+    usleep(30_000)
+    up.postToPid(pid)
+}
+
+/// Rows and cells that carry a frame but no accessible text. Some applications
+/// (LINE, other Chromium- or custom-drawn lists) expose their lists as hundreds
+/// of empty AXRow shells: geometry without names, actions or children. What a
+/// person reads in them is only on screen, so the helper reads it from the
+/// screen: one capture of the window, one text-recognition pass, and each line
+/// is assigned to the shell whose frame contains it. Such a shell is then a
+/// target like any other, pressed with a synthesised mouse click at its centre.
+let shellRoles: Set<String> = ["AXRow", "AXCell"]
+let maxShells = 60
+let mouseClickAction = "MouseClick"
+
+struct Collected {
+    let app: NSRunningApplication
+    let window: AXUIElement
+    let windowTitle: String
+    let windowFrame: (x: Int, y: Int, w: Int, h: Int)?
+    let nodes: [Node]
+    let texts: [String]
+    let ocr: String?
+}
+
+func intersects(_ a: (x: Int, y: Int, w: Int, h: Int), _ b: (x: Int, y: Int, w: Int, h: Int)) -> Bool {
+    a.w > 0 && a.h > 0 && a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
+}
+
 /// Walks one window and returns its interactive nodes plus its readable text.
 /// Depth-capped and count-capped, so a pathological app cannot produce an
-/// unbounded observation.
-func observe(bundleId: String) throws -> [String: Any] {
+/// unbounded observation. `observe` serialises the result and `resolve` picks an
+/// element out of a fresh one, so both always see the same node order.
+func collect(bundleId: String) throws -> Collected {
     guard let app = application(bundleId: bundleId) else {
         throw HelperError("no running application with bundle id \(bundleId)")
     }
-    let appElement = AXUIElementCreateApplication(app.processIdentifier)
-    let windows = (attribute(appElement, kAXWindowsAttribute) as? [AXUIElement]) ?? []
-    guard let window = windows.first else {
+    let appElement = applicationElement(app)
+    guard let window = primaryWindow(appElement) else {
         throw HelperError("application \(bundleId) has no window")
     }
+    let windowFrame = frame(window)
 
     var nodes: [Node] = []
     var texts: [String] = []
+    var shells: [(element: AXUIElement, role: String, subrole: String, frame: (x: Int, y: Int, w: Int, h: Int))] = []
     var seen = 0
 
     func walk(_ element: AXUIElement, _ depth: Int) {
@@ -164,25 +241,177 @@ func observe(bundleId: String) throws -> [String: Any] {
             )
         } else if role == "AXStaticText", let value = text(element, kAXValueAttribute), !value.isEmpty {
             texts.append(value)
+        } else if shellRoles.contains(role), shells.count < maxShells,
+                  accessibleName(element).isEmpty,
+                  (text(element, kAXValueAttribute) ?? "").isEmpty,
+                  let f = frame(element), let wf = windowFrame, intersects(f, wf) {
+            shells.append((element, role, subrole, f))
         }
         for child in children(element) { walk(child, depth + 1) }
     }
 
     walk(window, 0)
 
-    let windowTitle = text(window, kAXTitleAttribute) ?? ""
-    let signature = nodes
-        .map { "\($0.index)|\($0.role)|\($0.subrole)|\($0.name)|\($0.value)|\($0.identifier)|\($0.enabled)" }
-        .joined(separator: "\u{1}")
+    // Unnamed controls with a frame (a composer whose placeholder is only drawn,
+    // an icon button) are named from the same capture, so the screen is read once.
+    let unnamed = nodes.indices.filter { nodes[$0].name.isEmpty && nodes[$0].value.isEmpty && nodes[$0].frame != nil }
+    var ocr: String? = nil
+    var recognisedLeftover: [RecognisedLine] = []
+    if !shells.isEmpty || !unnamed.isEmpty, let wf = windowFrame {
+        if !CGPreflightScreenCaptureAccess() {
+            ocr = "screen_recording_denied"
+        } else {
+            let lines = recogniseText(window: windowNumber(pid: app.processIdentifier, frame: wf), in: wf)
+            ocr = "\(lines.count) lines"
+            var consumed = Set<Int>()
+            func textInside(_ f: (x: Int, y: Int, w: Int, h: Int)) -> String {
+                let inside = lines.indices.filter {
+                    let c = lines[$0].centre
+                    return c.x >= f.x && c.x < f.x + f.w && c.y >= f.y && c.y < f.y + f.h
+                }
+                for i in inside { consumed.insert(i) }
+                return inside
+                    .sorted { lines[$0].centre.y != lines[$1].centre.y ? lines[$0].centre.y < lines[$1].centre.y : lines[$0].centre.x < lines[$1].centre.x }
+                    .map { lines[$0].text }
+                    .joined(separator: " · ")
+            }
+            for i in unnamed {
+                let name = textInside(nodes[i].frame!)
+                if !name.isEmpty { nodes[i] = nodes[i].renamed(String(name.prefix(120))) }
+            }
+            for shell in shells {
+                let inside = textInside(shell.frame)
+                guard !inside.isEmpty, nodes.count < 400 else { continue }
+                nodes.append(
+                    Node(
+                        element: shell.element,
+                        index: nodes.count,
+                        role: shell.role,
+                        subrole: shell.subrole,
+                        name: String(inside.prefix(120)),
+                        value: "",
+                        identifier: "",
+                        enabled: true,
+                        actions: [mouseClickAction],
+                        frame: shell.frame
+                    )
+                )
+            }
+            recognisedLeftover = lines.indices.filter { !consumed.contains($0) }.map { lines[$0] }
+        }
+    }
 
-    return [
+    // What the recogniser read outside any control is the window's content as
+    // a person sees it (a chat's header and messages, a status line): it joins
+    // the window text so the decision layer has evidence, not only targets.
+    if let wf = windowFrame, ocr != nil, ocr != "screen_recording_denied" {
+        _ = wf
+        let leftover = recognisedLeftover
+            .sorted { $0.centre.y != $1.centre.y ? $0.centre.y < $1.centre.y : $0.centre.x < $1.centre.x }
+            .map { $0.text }
+        if !leftover.isEmpty { texts.append(contentsOf: leftover) }
+    }
+
+    return Collected(
+        app: app,
+        window: window,
+        windowTitle: text(window, kAXTitleAttribute) ?? "",
+        windowFrame: windowFrame,
+        nodes: nodes,
+        texts: texts,
+        ocr: ocr
+    )
+}
+
+struct RecognisedLine {
+    let text: String
+    let centre: (x: Int, y: Int)
+}
+
+/// The window server's id for the application window at `frame`, so the capture
+/// is of that window itself, not of whatever is stacked over that part of the
+/// screen. Nil when it cannot be found; the caller then captures the region.
+func windowNumber(pid: pid_t, frame: (x: Int, y: Int, w: Int, h: Int)) -> CGWindowID? {
+    guard let list = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+    else { return nil }
+    for entry in list {
+        guard (entry[kCGWindowOwnerPID as String] as? pid_t) == pid,
+              (entry[kCGWindowLayer as String] as? Int) == 0,
+              let bounds = entry[kCGWindowBounds as String] as? [String: Any],
+              let x = bounds["X"] as? Double, let y = bounds["Y"] as? Double,
+              let w = bounds["Width"] as? Double, let h = bounds["Height"] as? Double,
+              abs(Int(x) - frame.x) <= 2, abs(Int(y) - frame.y) <= 2,
+              abs(Int(w) - frame.w) <= 2, abs(Int(h) - frame.h) <= 2,
+              let number = entry[kCGWindowNumber as String] as? CGWindowID
+        else { continue }
+        return number
+    }
+    return nil
+}
+
+/// Captures one window (or, failing that, its screen rectangle in points,
+/// top-left origin) and recognises the text in it. Accurate mode is required:
+/// the fast recogniser has no CJK support.
+func recogniseText(window: CGWindowID?, in rect: (x: Int, y: Int, w: Int, h: Int)) -> [RecognisedLine] {
+    let path = NSTemporaryDirectory() + "ax-helper-ocr-\(getpid()).png"
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    let capture = Process()
+    capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+    capture.arguments = window.map { ["-x", "-o", "-l", "\($0)", path] }
+        ?? ["-x", "-R", "\(rect.x),\(rect.y),\(rect.w),\(rect.h)", path]
+    do { try capture.run() } catch { return [] }
+    capture.waitUntilExit()
+    guard let image = NSImage(contentsOfFile: path)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+    else { return [] }
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = .accurate
+    request.usesLanguageCorrection = true
+    // Order matters: Vision reads with the first language as primary, and CJK
+    // text read as Latin comes back as noise. Traditional Chinese and English
+    // first, then the system's preferred languages, without duplicates.
+    var languages: [String] = []
+    for language in ["zh-Hant", "en-US"] + Locale.preferredLanguages.prefix(3).map({ String($0) })
+    where !languages.contains(language) { languages.append(language) }
+    request.recognitionLanguages = languages
+    guard (try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])) != nil else { return [] }
+    return (request.results ?? []).compactMap { observation in
+        guard let candidate = observation.topCandidates(1).first else { return nil }
+        let box = observation.boundingBox // normalised, origin bottom-left
+        let cx = rect.x + Int(box.midX * Double(rect.w))
+        let cy = rect.y + Int((1 - box.midY) * Double(rect.h))
+        return RecognisedLine(text: candidate.string, centre: (cx, cy))
+    }
+}
+
+func signatureOf(_ nodes: [Node]) -> String {
+    // The signature is the identity of the controls, not their state: which
+    // controls exist, in which order, under which names. A value that ticks (a
+    // player's time, a counter) or text that rotates (an advertisement) does not
+    // make the window a different surface, and treating it as one left a run on a
+    // video site unable to act because every re-observation "changed". A control
+    // that appears, disappears or is renamed still changes the signature, so a
+    // press still lands only on the control that was observed.
+    // Digits in a name are normalised: a player's seek slider is named by its
+    // position ("0 分鐘 2 秒，共 29 分鐘 33 秒") and a badge by its count, and
+    // neither makes it a different control.
+    fnv1a(
+        nodes
+            .map { "\($0.index)|\($0.role)|\($0.subrole)|\(digitsNormalised($0.name))|\($0.identifier)|\($0.enabled)" }
+            .joined(separator: "\u{1}")
+    )
+}
+
+func observe(bundleId: String) throws -> [String: Any] {
+    let collected = try collect(bundleId: bundleId)
+    var result: [String: Any] = [
         "ok": true,
         "bundleId": bundleId,
-        "app": app.localizedName ?? bundleId,
-        "window": windowTitle,
-        "signature": fnv1a(signature),
-        "text": String(texts.joined(separator: "\n").prefix(6000)),
-        "nodes": nodes.map { node -> [String: Any] in
+        "app": collected.app.localizedName ?? bundleId,
+        "window": collected.windowTitle,
+        "windowFrame": collected.windowFrame.map { ["x": $0.x, "y": $0.y, "w": $0.w, "h": $0.h] } ?? [:],
+        "signature": signatureOf(collected.nodes),
+        "text": String(collected.texts.joined(separator: "\n").prefix(6000)),
+        "nodes": collected.nodes.map { node -> [String: Any] in
             var entry: [String: Any] = [
                 "index": node.index,
                 "role": node.role,
@@ -202,6 +431,37 @@ func observe(bundleId: String) throws -> [String: Any] {
             return entry
         },
     ]
+    if let ocr = collected.ocr { result["ocr"] = ocr }
+    return result
+}
+
+/// Synthesises a left click at a screen point (top-left origin). The click goes
+/// through the event tap, so the application must be frontmost; `press` activates
+/// it first. This is how a shell row with no accessibility action is chosen.
+/// Clicks at a point and puts the pointer back where it was. Leaving it over the
+/// target would keep hover effects (highlights, icons that appear under the pointer)
+/// alive, and the next observation would read them as a change the click made.
+func mouseClick(x: Int, y: Int) {
+    let point = CGPoint(x: x, y: y)
+    let before = CGEvent(source: nil)?.location
+    guard let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left),
+          let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+          let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
+    else { return }
+    move.post(tap: .cghidEventTap)
+    usleep(60_000)
+    down.post(tap: .cghidEventTap)
+    usleep(40_000)
+    up.post(tap: .cghidEventTap)
+    if let before,
+       let back = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: before, mouseButton: .left) {
+        usleep(40_000)
+        back.post(tap: .cghidEventTap)
+    }
+}
+
+func digitsNormalised(_ value: String) -> String {
+    value.replacingOccurrences(of: "[0-9]+", with: "#", options: .regularExpression)
 }
 
 /// Stable across processes, unlike Swift's Hasher.
@@ -225,49 +485,14 @@ struct HelperError: Error, CustomStringConvertible {
 /// the signature the caller observed. This is the desktop equivalent of a fresh
 /// element handle: an action cannot land on whatever replaced the target.
 func resolve(bundleId: String, signature: String, index: Int) throws -> Node {
-    let fresh = try observe(bundleId: bundleId)
-    guard let freshSignature = fresh["signature"] as? String, freshSignature == signature else {
+    let fresh = try collect(bundleId: bundleId)
+    guard signatureOf(fresh.nodes) == signature else {
         throw HelperError("surface changed since the observation")
     }
-    guard let raw = fresh["nodes"] as? [[String: Any]],
-          let match = raw.first(where: { ($0["index"] as? Int) == index })
-    else {
+    guard let node = fresh.nodes.first(where: { $0.index == index }) else {
         throw HelperError("no node at index \(index)")
     }
-    // Rebuild the element by walking again, keeping only the requested index.
-    guard let app = application(bundleId: bundleId) else {
-        throw HelperError("application disappeared")
-    }
-    let appElement = AXUIElementCreateApplication(app.processIdentifier)
-    let windows = (attribute(appElement, kAXWindowsAttribute) as? [AXUIElement]) ?? []
-    guard let window = windows.first else { throw HelperError("no window") }
-    var found: AXUIElement?
-    var counter = 0
-    func walk(_ element: AXUIElement, _ depth: Int) {
-        if depth > 24 || found != nil { return }
-        let role = text(element, kAXRoleAttribute) ?? ""
-        let subrole = text(element, kAXSubroleAttribute) ?? ""
-        if isInteractive(role, subrole, actions(element)) {
-            if counter == index { found = element; return }
-            counter += 1
-        }
-        for child in children(element) { walk(child, depth + 1) }
-    }
-    walk(window, 0)
-    guard let element = found else { throw HelperError("node \(index) vanished") }
-    _ = match
-    return Node(
-        element: element,
-        index: index,
-        role: match["role"] as? String ?? "",
-        subrole: match["subrole"] as? String ?? "",
-        name: match["name"] as? String ?? "",
-        value: match["value"] as? String ?? "",
-        identifier: match["identifier"] as? String ?? "",
-        enabled: match["enabled"] as? Bool ?? true,
-        actions: match["actions"] as? [String] ?? [],
-        frame: nil
-    )
+    return node
 }
 
 // MARK: - protocol
@@ -334,10 +559,25 @@ func handle(_ request: [String: Any]) {
             else { throw HelperError("press needs bundleId, signature and index") }
             let node = try resolve(bundleId: id, signature: signature, index: index)
             guard node.enabled else { throw HelperError("node \(index) is disabled") }
-            guard node.actions.contains(kAXPressAction) else {
-                throw HelperError("node \(index) has no press action")
+            if node.actions.contains(mouseClickAction) {
+                guard let f = node.frame else { throw HelperError("node \(index) has no frame") }
+                if let app = application(bundleId: id), !app.isActive {
+                    app.activate()
+                    usleep(300_000)
+                }
+                mouseClick(x: f.x + f.w / 2, y: f.y + f.h / 2)
+                respond(["ok": true])
+                break
             }
-            let result = AXUIElementPerformAction(node.element, kAXPressAction as CFString)
+            // A control without AXPress is still interactive when it confirms or
+            // picks (search fields, combo boxes); pressing it means that action.
+            // Safari's toolbar buttons list only custom actions (move, remove) while
+            // still answering AXPress; a pressable role is tried before giving up.
+            guard let action = [kAXPressAction, kAXConfirmAction, kAXPickAction]
+                .first(where: { node.actions.contains($0) })
+                ?? (pressableRoles.contains(node.role) ? kAXPressAction : nil)
+            else { throw HelperError("node \(index) has no press action") }
+            let result = AXUIElementPerformAction(node.element, action as CFString)
             guard result == .success else { throw HelperError("press failed: AXError \(result.rawValue)") }
             respond(["ok": true])
         case "setvalue":
@@ -347,10 +587,38 @@ func handle(_ request: [String: Any]) {
                   let value = request["value"] as? String
             else { throw HelperError("setvalue needs bundleId, signature, index and value") }
             let node = try resolve(bundleId: id, signature: signature, index: index)
+            // A field that can confirm (a browser address bar, a search field) is
+            // submitted, because a value left unconfirmed there does nothing. It is
+            // focused first: Safari repopulates its address bar with the page URL
+            // when it gains focus, which would discard a value set before that.
+            let submits = node.actions.contains(kAXConfirmAction) || node.subrole == "AXSearchField"
+            if submits {
+                AXUIElementSetAttributeValue(node.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+                usleep(100_000)
+            }
             let result = AXUIElementSetAttributeValue(
                 node.element, kAXValueAttribute as CFString, value as CFString
             )
             guard result == .success else { throw HelperError("setvalue failed: AXError \(result.rawValue)") }
+            if submits, let app = application(bundleId: id) {
+                usleep(150_000)
+                // AXConfirm alone does not navigate Safari; the Return key does. It is
+                // posted to the application's pid, so it cannot land in another window.
+                pressReturn(pid: app.processIdentifier)
+            }
+            respond(["ok": true])
+        case "return":
+            // Return in a field that cannot confirm through accessibility: a chat
+            // composer sends on Return and exposes no send button.
+            guard let id = request["bundleId"] as? String,
+                  let signature = request["signature"] as? String,
+                  let index = request["index"] as? Int
+            else { throw HelperError("return needs bundleId, signature and index") }
+            let node = try resolve(bundleId: id, signature: signature, index: index)
+            guard let app = application(bundleId: id) else { throw HelperError("application disappeared") }
+            AXUIElementSetAttributeValue(node.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            usleep(100_000)
+            pressReturn(pid: app.processIdentifier)
             respond(["ok": true])
         case "quit":
             respond(["ok": true])

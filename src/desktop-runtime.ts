@@ -104,15 +104,21 @@ export async function runDesktop(
 					`${input.bundleId} is not running. Start it, or call again with launch: true.`,
 				);
 			await execFileAsync("open", ["-b", input.bundleId]);
-			for (let attempt = 0; attempt < 40 && !(await isRunning(driver, input.bundleId)); attempt++)
+			// A browser's cold start can take well over ten seconds on a busy machine.
+			for (let attempt = 0; attempt < 120 && !(await isRunning(driver, input.bundleId)); attempt++)
 				await sleep(250);
 			if (!(await isRunning(driver, input.bundleId)))
-				throw configurationError(`${input.bundleId} did not start within 10 seconds.`);
+				throw configurationError(`${input.bundleId} did not start within 30 seconds.`);
 		}
 		if (input.activate !== false) await driver.activate();
 		host.onEvent?.("desktop-start", { bundleId: input.bundleId });
 		const result = await runJev(
-			{ goal: input.goal, maxSteps: input.maxSteps, minProbability: input.minProbability },
+			{
+				goal: input.goal,
+				maxSteps: input.maxSteps,
+				minProbability: input.minProbability,
+				timeoutMs: input.timeoutMs,
+			},
 			{
 				driver,
 				policy,

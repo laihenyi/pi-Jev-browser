@@ -21,7 +21,7 @@ after(() => rmSync(directory, { recursive: true, force: true }));
 const NODES = [
 	{ index: 0, role: "AXButton", name: "7", value: "", identifier: "Seven", enabled: true, actions: ["AXPress"] },
 	{ index: 1, role: "AXButton", name: "乘", value: "", identifier: "Multiply", enabled: true, actions: ["AXPress"] },
-	{ index: 2, role: "AXTextField", name: "Search", value: "hello", identifier: "SearchField", enabled: true, actions: ["AXSetValue"] },
+	{ index: 2, role: "AXTextArea", name: "Search", value: "hello", identifier: "SearchField", enabled: true, actions: ["AXSetValue"] },
 	{ index: 3, role: "AXButton", name: "Disabled", value: "", identifier: "Off", enabled: false, actions: [] },
 	{ index: 4, role: "AXButton", name: "", value: "", identifier: "", enabled: true, actions: ["AXPress"] },
 ];
@@ -57,18 +57,23 @@ test("the accessibility tree becomes addressable targets", async () => {
 		assert.equal(snapshot.data.text, "1234");
 		// A disabled control is not offered, and an unnamed one falls back to its role
 		// so the decision layer still has something to reason about.
+		// A multi-line field that cannot confirm also gets a Return target of its own,
+		// so submitting (sending, in a chat) is a step the decision layer chooses by name.
 		assert.deepEqual(
 			snapshot.data.targets.map((target) => target.id),
-			["0", "1", "2", "4"],
+			["0", "1", "2", "2:return", "4"],
 		);
-		const [seven, multiply, field] = snapshot.data.targets;
+		const [seven, multiply, field, submit] = snapshot.data.targets;
+		assert.equal(submit.label, "⏎ Search");
+		assert.equal(submit.role, "submit");
+		assert.equal(submit.operation, "CLICK");
 		assert.equal(seven.label, "7");
 		assert.equal(seven.identifier, "Seven");
 		assert.equal(seven.operation, "CLICK");
 		assert.equal(multiply.label, "乘");
 		assert.equal(multiply.identifier, "Multiply");
 		assert.equal(field.operation, "TYPE_TEXT", "a text field is typed into, not pressed");
-		assert.equal(snapshot.data.targets[3].label, "AXButton", "unnamed targets fall back to role");
+		assert.equal(snapshot.data.targets[4].label, "AXButton", "unnamed targets fall back to role");
 	} finally {
 		await driver.close();
 	}
@@ -173,6 +178,33 @@ test("a vanished window is classified, not reported as an unexpected error", asy
 		assert.equal(driver.readFailureCategory?.(new Error("application com.test.app has no window")), "window_unavailable");
 		assert.equal(driver.readFailureCategory?.(new Error("no running application with bundle id com.test.app")), "window_unavailable");
 		assert.equal(driver.readFailureCategory?.(new Error("something else")), undefined);
+	} finally {
+		await driver.close();
+	}
+});
+
+test("only elements inside the window are targets; the rest are named as offscreen", async () => {
+	const nodes = [
+		{ index: 0, role: "AXButton", name: "Inside", value: "", identifier: "", enabled: true, actions: ["AXPress"], x: 10, y: 120, w: 40, h: 20 },
+		{ index: 1, role: "AXButton", name: "Above", value: "", identifier: "", enabled: true, actions: ["AXPress"], x: 10, y: 20, w: 40, h: 20 },
+		{ index: 2, role: "AXLink", name: "Below", value: "", identifier: "", enabled: true, actions: ["AXPress"], x: 10, y: 900, w: 40, h: 20 },
+		{ index: 3, role: "AXButton", name: "", value: "", identifier: "", enabled: true, actions: ["AXPress"], x: 10, y: 950, w: 40, h: 20 },
+		{ index: 4, role: "AXButton", name: "Zero", value: "", identifier: "", enabled: true, actions: ["AXPress"], x: 10, y: 130, w: 0, h: 0 },
+		{ index: 5, role: "AXButton", name: "No frame", value: "", identifier: "", enabled: true, actions: ["AXPress"] },
+	];
+	const { driver } = driverWith({
+		FAKE_AX_NODES: JSON.stringify(nodes),
+		FAKE_AX_WINDOW_FRAME: JSON.stringify({ x: 0, y: 100, w: 800, h: 600 }),
+	});
+	try {
+		const snapshot = await driver.observe();
+		assert.deepEqual(
+			snapshot.data.targets.map((t) => [t.id, t.label]),
+			[["0", "Inside"], ["5", "No frame"]],
+			"offscreen and zero-sized elements are not offered; indices stay the helper's",
+		);
+		assert.deepEqual(snapshot.data.offscreenControls, { above: ["Above"], below: ["Below"] });
+		await snapshot.dispose();
 	} finally {
 		await driver.close();
 	}

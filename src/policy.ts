@@ -157,6 +157,107 @@ ${steps}
 Choose DONE only when the observed text shows that the goal is met.`;
 }
 
+/**
+ * Field text without a second model. Almost every value a run has to type is
+ * already written down: in the goal ("點選 YouTube", "search for wool socks") or
+ * on the surface itself. So the candidates are extracted mechanically and Jev
+ * chooses among them, the same way it chooses an action or a plan step. One
+ * choice question, sub-second, no free-text generation. A value that is not in
+ * the goal (a message to compose, a password) is not offered, Jev answers NONE,
+ * and the loop hands the field back to the human or to the optional generator.
+ */
+export const TEXT_RULES = `Choose the value to enter into the selected field, taken from the goal. A browser address bar takes a site address such as name.com, never a sentence or an instruction. A search field takes the subject to find, without the instruction words around it (open, find, search, click). A form field takes exactly the value the goal states for it. Prefer the shortest candidate that carries the whole intended value. Choose NONE when the goal does not contain the value, when the value would be personal or sensitive, or when this field should not be filled now.`;
+
+export const MAX_TEXT_CANDIDATES = 24;
+
+const ADDRESS_FIELD = /address|url|location|網址|搜尋欄位|omnibox|WEB_BROWSER_ADDRESS/i;
+const LATIN_WORD = /^[A-Za-z][A-Za-z0-9-]{1,}$/;
+
+/**
+ * Phrases from the goal that could be typed into `target`: quoted phrases, the
+ * goal's sentences, every contiguous run of their whitespace tokens, and, for an
+ * address bar, only the site addresses the goal names. Order is by specificity
+ * (quoted, then sentences, then runs); the cap keeps the question bounded on a
+ * long goal.
+ */
+export function textCandidates(
+	goal: string,
+	target: Pick<ObservedTarget, "label" | "identifier" | "value" | "role">,
+	limit = MAX_TEXT_CANDIDATES,
+): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	const add = (value: string) => {
+		const text = value.trim().replace(/\s+/g, " ");
+		if (!text || text.length > 200 || seen.has(text) || text === target.value) return;
+		seen.add(text);
+		out.push(text);
+	};
+	// An address bar navigates; it is not where a search phrase belongs. When the
+	// goal names sites (Latin words, or anything already written like a host), only
+	// addresses are offered there, so "open YouTube, then search for X" cannot turn
+	// into a web search for X from the address bar. A goal with no site name falls
+	// through to the general candidates.
+	if (ADDRESS_FIELD.test(`${target.label} ${target.identifier ?? ""}`)) {
+		for (const token of goal.split(/[^A-Za-z0-9.:/-]+/)) {
+			if (/^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+(\/\S*)?$/i.test(token) || /^https?:\/\//i.test(token)) add(token);
+			else if (LATIN_WORD.test(token)) add(`${token.toLowerCase()}.com`);
+		}
+		if (out.length > 0) return out.slice(0, limit);
+	}
+	for (const match of goal.matchAll(/「([^」]+)」|"([^"]+)"|“([^”]+)”|'([^']+)'|『([^』]+)』/g))
+		add(match.slice(1).find((group) => group !== undefined) ?? "");
+	const sentences = goal
+		.split(/[。．.!?！?？;；\n]+|[,，、:：]\s*/)
+		.map((part) => part.replace(/[「」“”"'『』]/g, "").trim())
+		.filter(Boolean);
+	for (const sentence of sentences) add(sentence);
+	const runs: string[] = [];
+	for (const sentence of sentences) {
+		const tokens = sentence.split(/\s+/).filter(Boolean);
+		// Runs of up to four tokens: a field value is a name or a short phrase, and
+		// longer runs of a sentence only crowd out the short ones under the cap.
+		for (let length = Math.min(tokens.length - 1, 4); length >= 1; length--)
+			for (let start = 0; start + length <= tokens.length; start++) {
+				const run = tokens.slice(start, start + length).join(" ");
+				if (length > 1 || run.length > 2) runs.push(run);
+			}
+	}
+	for (const run of runs) add(run);
+	return out.slice(0, limit);
+}
+
+export function buildTextQuestion(
+	observation: Observation,
+	goal: string,
+	target: ObservedTarget,
+	candidates: string[],
+	textRules: string = TEXT_RULES,
+) {
+	const criteria: ChoiceCriteria = {
+		NONE: "The goal does not contain the value for this field, the value would be personal or sensitive, or the field should not be filled now.",
+	};
+	candidates.forEach((text, index) => {
+		criteria[`TEXT:${index}`] = { text };
+	});
+	const question: ChoiceQuestion = {
+		type: "choice",
+		instructions: {
+			goal,
+			rules: textRules,
+			field: {
+				label: target.label,
+				currentValue: target.value,
+				role: target.role ?? null,
+				identifier: target.identifier ?? null,
+			},
+			task: "Choose the candidate text to enter into the field, or NONE.",
+		},
+		criteria,
+	};
+	return { text: question } satisfies Questions;
+}
+
 export interface Decision {
 	operation: string;
 	target?: ObservedTarget;
@@ -302,7 +403,12 @@ export function createTypeSafeClient(
 }
 
 export function createJevPolicy(options: {
-	text: TextGenerator;
+	/**
+	 * Optional free-text generator, consulted only when Jev finds no candidate in
+	 * the goal (answers NONE). Without it, such a field ends the run as
+	 * text_unavailable for the human to fill.
+	 */
+	text?: TextGenerator;
 	client?: TypeSafeClient;
 	credentials?: JevCredentials;
 	/**
@@ -393,6 +499,28 @@ export function createJevPolicy(options: {
 			};
 		},
 		async text(observation, goal, target, history, signal) {
+			const candidates = textCandidates(goal, target);
+			if (candidates.length > 0) {
+				const questions = buildTextQuestion(observation, goal, target, candidates);
+				const result = await clientFor().systemOne(
+					{
+						state: JSON.stringify({ page: observation, recentActions: history.slice(-6) }),
+						questions,
+					},
+					{ signal },
+				);
+				const answer = result.answers.text;
+				if (
+					answer?.type !== "choice" ||
+					!Object.hasOwn(questions.text.criteria, answer.choice)
+				)
+					throw new Error("Jev returned an unoffered text.");
+				if (answer.choice !== "NONE") {
+					const index = Number(answer.choice.slice("TEXT:".length));
+					return { text: candidates[index] ?? null };
+				}
+			}
+			if (!options.text) return { text: null };
 			const result = await options.text({
 				system: TEXT_HELPER_SYSTEM,
 				prompt: JSON.stringify({

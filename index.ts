@@ -514,7 +514,10 @@ export default function (pi: ExtensionAPI) {
 				Type.Boolean({ description: "Plan the steps from the first observation before acting. Defaults to true." }),
 			),
 			maxSteps: Type.Optional(
-				Type.Integer({ minimum: 1, maximum: 60, description: "Defaults to 20; the whole run is also bounded to 100 seconds." }),
+				Type.Integer({ minimum: 1, maximum: 60, description: "Defaults to 20; the whole run is also bounded by timeoutMs." }),
+			),
+			timeoutMs: Type.Optional(
+				Type.Integer({ minimum: 1000, maximum: 600_000, description: "Wall-clock budget for the whole run. Defaults to 100000; a task that waits on page loads needs more." }),
 			),
 			minProbability: Type.Optional(
 				Type.Number({ minimum: 0, maximum: 1, description: "Optional minimum selected-choice probability." }),

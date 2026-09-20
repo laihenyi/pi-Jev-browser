@@ -46,6 +46,7 @@ export interface DesktopDriver extends Driver {
 interface RawNode {
 	index: number;
 	role: string;
+	subrole?: string;
 	name: string;
 	value: string;
 	identifier: string;
@@ -56,6 +57,9 @@ interface RawNode {
 	w?: number;
 	h?: number;
 }
+
+const SETTLE_INTERVAL_MS = 300;
+const SETTLE_BUDGET_MS = 2_500;
 
 const TEXT_ROLES = new Set(["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]);
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -165,6 +169,7 @@ export function desktopDriver(options: DesktopDriverOptions): DesktopDriver {
 					window: string;
 					signature: string;
 					text: string;
+					windowFrame?: { x: number; y: number; w: number; h: number };
 					nodes: RawNode[];
 				};
 			lastError = new Error(String(response.error ?? "observe failed"));
@@ -176,21 +181,72 @@ export function desktopDriver(options: DesktopDriverOptions): DesktopDriver {
 	};
 
 	const snapshotFrom = (raw: Awaited<ReturnType<typeof rawObserve>>): ObservationSnapshot => {
-		const targets: ObservedTarget[] = raw.nodes
-			.filter((node) => node.enabled !== false)
-			.map((node) => ({
+		// As in the browser: only what is inside the window is a target, and the
+		// rest is listed by name so the decision layer knows it exists. A web page in
+		// a browser window exposes every element of the document, on screen or not,
+		// and offering all of them both exceeds Jev's input and invites clicks on
+		// controls nobody can see. Zero-sized elements (scroll-bar arrows) are
+		// dropped. Indices are the helper's, so pressing stays exact.
+		const windowFrame = raw.windowFrame;
+		const offscreenControls = { above: [] as string[], below: [] as string[] };
+		const targets: ObservedTarget[] = [];
+		for (const node of raw.nodes) {
+			if (node.enabled === false) continue;
+			const label = node.name || node.identifier || node.role;
+			if (node.w !== undefined && node.h !== undefined && node.x !== undefined && node.y !== undefined) {
+				if (node.w <= 0 || node.h <= 0) continue;
+				if (windowFrame && windowFrame.w > 0 && windowFrame.h > 0) {
+					if (node.y + node.h <= windowFrame.y) {
+						if (node.name && offscreenControls.above.length < 50) offscreenControls.above.push(node.name);
+						continue;
+					}
+					if (node.y >= windowFrame.y + windowFrame.h) {
+						if (node.name && offscreenControls.below.length < 50) offscreenControls.below.push(node.name);
+						continue;
+					}
+					if (node.x + node.w <= windowFrame.x || node.x >= windowFrame.x + windowFrame.w) continue;
+				}
+			}
+			if (targets.length >= 200) break;
+			// A browser's tab bar shows the titles of other pages. Named as plain
+			// radio buttons they read like results; as tabs, with the selected one
+			// marked, the decision layer knows they switch pages rather than open them.
+			const isTab = node.subrole === "AXTabButton";
+			const isText = TEXT_ROLES.has(node.role);
+			targets.push({
 				id: String(node.index),
-				operation: TEXT_ROLES.has(node.role) ? "TYPE_TEXT" : "CLICK",
-				label: node.name || node.identifier || node.role,
+				operation: isText ? "TYPE_TEXT" : "CLICK",
+				label,
 				value: node.value,
-				role: node.role,
+				role: isTab ? "tab" : node.role,
+				...(isTab ? { selected: node.value === "1" ? "true" : "false" } : {}),
 				...(node.identifier ? { identifier: node.identifier } : {}),
-			}));
+			});
+			// A multi-line field that cannot confirm through accessibility (a chat
+			// composer, a terminal) still submits on Return, and exposes no button
+			// for it. The submit is offered as its own target so the decision layer
+			// chooses it deliberately, and so a message is sent only by a step that
+			// says so. Single-line fields are left out: a search box shows its
+			// results as one types, and an address bar confirms through setvalue.
+			if (
+				node.role === "AXTextArea" &&
+				!node.actions.includes("AXConfirm") &&
+				targets.length < 200
+			)
+				targets.push({
+					id: `${node.index}:return`,
+					operation: "CLICK",
+					label: `⏎ ${label}`,
+					value: node.value,
+					role: "submit",
+				});
+		}
 		const data: Observation = {
 			url: `desktop://${bundleId}/${raw.window}`,
 			title: raw.window || raw.app,
-			text: raw.text,
+			text: raw.text.slice(0, 6000),
 			targets,
+			offscreenControls,
 			scrollUp: false,
 			scrollDown: false,
 		};
@@ -206,15 +262,24 @@ export function desktopDriver(options: DesktopDriverOptions): DesktopDriver {
 			async execute(operation: string, target?: ObservedTarget, value?: string) {
 				if (operation === "CLICK" || operation === "SELECT") {
 					if (!target) throw new Error(`${operation} needs a target`);
+					const [index, submit] = target.id.split(":");
 					const response = await call({
-						cmd: "press",
+						cmd: submit === "return" ? "return" : "press",
 						bundleId,
 						signature: raw.signature,
-						index: Number(target.id),
+						index: Number(index),
 					});
-					if (response.ok !== true)
-						throw translate(new Error(String(response.error ?? "press failed")));
-					return;
+					if (response.ok === true) return;
+					// AXError -25204 (cannot complete) is the app not answering in time,
+					// not the app refusing: Safari blocks on a new tab until the page
+					// starts loading. If the window has changed since the observation the
+					// press landed; only an unchanged window makes it a failure.
+					if (/-25204|cannot complete/i.test(String(response.error))) {
+						await sleep(500);
+						const after = await rawObserve();
+						if (after.signature !== raw.signature) return;
+					}
+					throw translate(new Error(String(response.error ?? "press failed")));
 				}
 				if (operation === "TYPE_TEXT") {
 					if (!target) throw new Error("TYPE_TEXT needs a target");
@@ -252,8 +317,28 @@ export function desktopDriver(options: DesktopDriverOptions): DesktopDriver {
 				throw new Error(String(response.error ?? "instance failed"));
 			return `desktop://${bundleId}/pid/${String(response.pid)}`;
 		},
+		/**
+		 * An observation is taken once the window has settled: two reads 300 ms
+		 * apart with the same signature. A page that is still loading grows new
+		 * controls for a few seconds, and acting on (or declaring done from) a
+		 * snapshot taken mid-load only produces stale re-observations. The wait is
+		 * bounded; a window that never settles is observed as it is.
+		 */
 		async observe() {
-			return snapshotFrom(await rawObserve());
+			// Two consecutive reads must agree on everything, the recognised text
+			// included: text recognition is deterministic on still pixels, so a
+			// difference means the window is still animating (activation, a list
+			// re-rendering) and a read taken now would be compared with a later one
+			// as though the action in between had changed something.
+			let raw = await rawObserve();
+			const deadline = Date.now() + SETTLE_BUDGET_MS;
+			while (Date.now() < deadline) {
+				await sleep(SETTLE_INTERVAL_MS);
+				const again = await rawObserve();
+				if (JSON.stringify(again) === JSON.stringify(raw)) break;
+				raw = again;
+			}
+			return snapshotFrom(raw);
 		},
 		async ping() {
 			const response = await call({ cmd: "ping" });

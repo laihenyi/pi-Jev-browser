@@ -432,23 +432,24 @@ test("a declined field value returns control instead of failing the run", async 
 });
 
 test("repeated identical actions and repeated stale reads stop the loop early", async (t) => {
-	await t.test("the same action three times is blocked", async () => {
+	await t.test("a control that changes nothing twice is withdrawn from the question", async () => {
 		const browser = await launchTestBrowser();
 		try {
 			const page = await browser.newPage();
-			// Clicking a plain button changes focus, so the observation keeps changing
-			// even though the goal never advances.
+			// Clicking a plain button changes nothing the observation can see, so the
+			// goal never advances. After two such presses the button is no longer
+			// offered, and a policy left with nothing to press says so.
 			await page.setContent('<button id="b">Toggle</button>');
+			const offered: string[][] = [];
 			const result = await runJev(
 				{ goal: "Open the widget", maxSteps: 20 },
 				{
 					driver: browserDriver(() => page),
 					policy: {
 						async choose(data) {
-							return {
-								operation: "CLICK",
-								target: data.targets.find((target) => target.label === "Toggle"),
-							};
+							offered.push(data.targets.map((target) => target.label));
+							const target = data.targets.find((target) => target.label === "Toggle");
+							return target ? { operation: "CLICK", target } : { operation: "BLOCKED" };
 						},
 						async text() {
 							throw new Error("Unexpected helper");
@@ -456,13 +457,14 @@ test("repeated identical actions and repeated stale reads stop the loop early", 
 					},
 				},
 			);
+			assert.deepEqual(offered, [["Toggle"], ["Toggle"], []]);
 			assert.equal(result.status, "blocked");
-			assert.equal(result.stopReason, "repeated_action");
+			assert.equal(result.stopReason, "model_blocked");
 			assert.equal(
 				result.steps.filter((step) => step.status === "executed").length,
-				3,
+				2,
+				"the third press never happens; the control was withdrawn instead",
 			);
-			assert.match(result.message, /executed 3 times/);
 		} finally {
 			await browser.close();
 		}
