@@ -72,6 +72,7 @@ shown to hold beyond the one it was calibrated on: Calculator is all buttons
 | --- | --- | --- |
 | `desktop-calculator-deterministic` | capability | The driver addresses buttons by accessibility identifier, the actions land, and the application's own display matches `1234 × 5678` computed here. No model is involved. |
 | `desktop-repeat-guard` | regression | Six presses of one digit produce six different displays and are not stopped as a repeat. Regression for the guard that counted identical actions and killed a run that was making progress. |
+| `desktop-focus-stolen` | regression | TextEdit is activated mid-run, as a person clicking another window would. All six presses still land and the other application stays frontmost. Regression for the surface identity that followed the frontmost application. |
 | `desktop-calculator-entry` | capability | Jev completing a ten-step entry, using the recipe the calibration tool found: an enumerated goal plus mechanical rules. |
 | `desktop-goal-needs-a-plan` | capability | The same task from a short goal. Jev plans the key sequence first (asserted step by step), then executes it. Formerly a documented gap — see below. |
 | `desktop-textedit-deterministic` | capability | A second application and a second kind of control: TextEdit's document is a text area with no press action, driven by setting its accessibility value. The sentence is read back from the application and must also appear in the window text. No model. |
@@ -119,13 +120,14 @@ live-flight-nonstop-filter        live     capability  PASS   16.4s
 live-pilotrun-header              live     capability  PASS    9.3s
 desktop-calculator-deterministic  desktop  capability  PASS    4.8s
 desktop-repeat-guard              desktop  regression  PASS    3.7s
+desktop-focus-stolen              desktop  regression  PASS    4.3s
 desktop-calculator-entry          desktop  capability  PASS    9.4s
 desktop-goal-needs-a-plan         desktop  capability  PASS   12.4s
 desktop-textedit-deterministic    desktop  capability  PASS    1.1s
 desktop-textedit-entry            desktop  capability  PASS    2.3s
 ```
 
-21 passed, 0 failed, 0 skipped. No scenario is reported as GAP: the two that were
+22 passed, 0 failed, 0 skipped. No scenario is reported as GAP: the two that were
 (`jev-verification-gate`, `desktop-goal-needs-a-plan`) are described below.
 
 Selected metrics from that run:
@@ -204,8 +206,11 @@ and the display it restored on relaunch showed the run had reached the sixth pre
 Pressing every non-digit control by hand afterwards, including the tip banner's
 close button, the sidebar toggle and the mode button, left the window in place, so
 the cause is not established. Since then the desktop scenarios record every loop
-step to `<scenario>.trace.jsonl` in the benchmark working directory and report the
-executed sequence in their metrics, so a recurrence will say what was pressed.
+step, and the raw error of a failed run, to `benchmarks/results/traces/<scenario>.trace.jsonl`
+and report the executed sequence in their metrics, so a recurrence will say what
+was pressed. A vanished window is reported as failure category `window_unavailable`.
+A later run with a monitor on the window count, while other applications took
+focus repeatedly, showed no drop across all seven scenarios.
 
 ## The verification gate: a gap that was measured, then closed
 

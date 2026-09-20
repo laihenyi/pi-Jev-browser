@@ -238,11 +238,19 @@ export function desktopDriver(options: DesktopDriverOptions): DesktopDriver {
 	};
 
 	return {
+		/**
+		 * The surface identity is the running instance of the driven application, not
+		 * the frontmost application. Accessibility actions land on the element whether
+		 * or not its window has focus, so a human switching to another window mid-run
+		 * changes nothing the loop acts on; a relaunch (new pid) or a quit does. The
+		 * first version used the frontmost bundle id and a stray click on another window
+		 * ended runs as stale_observations.
+		 */
 		async id() {
-			const response = await call({ cmd: "front" });
+			const response = await call({ cmd: "instance", bundleId });
 			if (response.ok !== true)
-				throw new Error(String(response.error ?? "front failed"));
-			return `desktop://front/${String(response.bundleId)}`;
+				throw new Error(String(response.error ?? "instance failed"));
+			return `desktop://${bundleId}/pid/${String(response.pid)}`;
 		},
 		async observe() {
 			return snapshotFrom(await rawObserve());
@@ -257,6 +265,17 @@ export function desktopDriver(options: DesktopDriverOptions): DesktopDriver {
 				throw new Error(String(response.error ?? "activate failed"));
 		},
 		call,
+		/**
+		 * A window that is gone is a desktop condition with a name, not an unexpected
+		 * error: the run's failure record says so, and a scenario or agent can tell a
+		 * closed application from a bug.
+		 */
+		readFailureCategory(error: unknown) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (/no window|has no window|no running application|application disappeared/i.test(message))
+				return "window_unavailable";
+			return undefined;
+		},
 		async close() {
 			if (!child) return;
 			const running = child;

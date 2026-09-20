@@ -306,6 +306,14 @@ func handle(_ request: [String: Any]) {
                 throw HelperError("no frontmost application")
             }
             respond(["ok": true, "bundleId": id, "name": app.localizedName ?? id])
+        case "instance":
+            // The running instance of the driven application, independent of which
+            // application is frontmost. Accessibility actions do not need focus, so a
+            // human switching windows mid-run must not look like the surface moving.
+            guard let id = request["bundleId"] as? String, let app = application(bundleId: id) else {
+                throw HelperError("no running application with bundle id \(request["bundleId"] ?? "")")
+            }
+            respond(["ok": true, "bundleId": id, "pid": Int(app.processIdentifier)])
         case "activate":
             guard let id = request["bundleId"] as? String, let app = application(bundleId: id) else {
                 throw HelperError("no running application for activation")

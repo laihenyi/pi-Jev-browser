@@ -145,11 +145,14 @@ test("scrolling is a no-op instead of a lie", async () => {
 	}
 });
 
-test("the surface identity comes from the frontmost application", async () => {
-	const { driver } = driverWith({ FAKE_AX_FRONT: "com.other.app" });
+test("the surface identity is the driven application's instance, whatever is frontmost", async () => {
+	// A human has switched to another application: the identity must not move with them.
+	const { driver, log } = driverWith({ FAKE_AX_FRONT: "com.other.app", FAKE_AX_PID: "777" });
 	try {
-		assert.equal(await driver.id(), "desktop://front/com.other.app");
+		assert.equal(await driver.id(), "desktop://com.test.app/pid/777");
+		assert.equal(await driver.id(), "desktop://com.test.app/pid/777");
 		assert.deepEqual(await driver.ping(), { trusted: true });
+		assert.equal(calls(log).some((request) => request.cmd === "front"), false);
 	} finally {
 		await driver.close();
 	}
@@ -162,4 +165,15 @@ test("a missing helper is reported with the build command", async () => {
 	});
 	await assert.rejects(driver.observe(), /npm run build:ax-helper/);
 	await driver.close();
+});
+
+test("a vanished window is classified, not reported as an unexpected error", async () => {
+	const { driver } = driverWith({});
+	try {
+		assert.equal(driver.readFailureCategory?.(new Error("application com.test.app has no window")), "window_unavailable");
+		assert.equal(driver.readFailureCategory?.(new Error("no running application with bundle id com.test.app")), "window_unavailable");
+		assert.equal(driver.readFailureCategory?.(new Error("something else")), undefined);
+	} finally {
+		await driver.close();
+	}
 });

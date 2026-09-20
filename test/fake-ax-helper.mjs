@@ -33,6 +33,9 @@ lines.on("line", (line) => {
 		case "front":
 			respond({ ok: true, bundleId: frontBundle });
 			return;
+		case "instance":
+			respond({ ok: true, bundleId: request.bundleId, pid: Number(process.env.FAKE_AX_PID ?? 4242) });
+			return;
 		case "activate":
 			respond({ ok: true });
 			return;

@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { promisify } from "node:util";
+import { StaleObservationError } from "../../src/driver.ts";
 import { runJev } from "../../src/loop.ts";
 import type { JevPolicy } from "../../src/policy.ts";
 import { defaultHelperPath, desktopDriver, DESKTOP_RULES, type DesktopDriver } from "../../src/drivers/desktop.ts";
@@ -131,13 +132,21 @@ async function displayText(driver: DesktopDriver, budgetMs = 4000): Promise<stri
  * entry and "Clear" afterwards.
  */
 async function reset(driver: DesktopDriver) {
-	for (let attempt = 0; attempt < 4; attempt++) {
+	for (let attempt = 0; attempt < 6; attempt++) {
 		const snapshot = await driver.observe();
 		const clear = snapshot.data.targets.find((target) =>
 			/^(AllClear|Clear)$/.test(target.identifier ?? ""),
 		);
 		if (!clear) break;
-		await snapshot.execute("CLICK", clear, undefined, AbortSignal.timeout(5000));
+		try {
+			await snapshot.execute("CLICK", clear, undefined, AbortSignal.timeout(5000));
+		} catch (error) {
+			// The display was still changing when the press was bound: observe again and
+			// press from the fresh state, which is what the loop itself would do.
+			if (!(error instanceof StaleObservationError)) throw error;
+			await sleep(300);
+			continue;
+		}
 		// Let the display settle so the first press does not race a fresh launch.
 		const display = await displayText(driver);
 		if (displayValues(display).every((value) => value === "0")) return;
@@ -267,6 +276,67 @@ export const desktopScenarios: Scenario[] = [
 		},
 	},
 	{
+		id: "desktop-focus-stolen",
+		tier: "desktop",
+		category: "regression",
+		needsCredentials: false,
+		title: "A human switching to another window mid-run does not disturb the run",
+		notes:
+			"After the second decision the scenario activates TextEdit, as a person would by clicking another window. The surface identity used to be the frontmost application, so this ended runs as stale_observations. Accessibility actions do not need focus: all six presses must land, the display must read 111,111, and Calculator must not be frontmost at the end, which proves the focus was really taken and never handed back (any other application counts: on a busy machine something else may have taken it since).",
+		skip: hostSkipReason,
+		async run(context) {
+			void context;
+			const driver = desktopDriver({ bundleId: BUNDLE });
+			try {
+				await driver.activate();
+				await reset(driver);
+				let calls = 0;
+				let stolenAt: number | undefined;
+				const policy: JevPolicy = {
+					async choose(snapshot) {
+						calls++;
+						if (calls === 3) {
+							await execFileAsync("osascript", ["-e", 'tell application "TextEdit" to activate']);
+							await sleep(400);
+							stolenAt = calls;
+						}
+						return {
+							operation: "CLICK",
+							target: snapshot.targets.find((target) => target.identifier === "One"),
+							probability: 0.9,
+						} as never;
+					},
+					async text() {
+						return { text: null };
+					},
+				};
+				const result = await runJev(
+					{ goal: "Press the same digit repeatedly", maxSteps: 6 },
+					{ driver, policy },
+				);
+				const display = await displayText(driver);
+				const front = await driver.call({ cmd: "front" });
+				return {
+					checks: [
+						check("the focus was really taken during the run", stolenAt === 3, String(stolenAt)),
+						check("the run was not stopped as stale", result.stopReason !== "stale_observations", result.stopReason),
+						check("all six presses were executed", result.steps.filter((step) => step.status === "executed").length === 6, String(result.steps.length)),
+						check("the display shows every press landed", displayValues(display).includes("1".repeat(6)), display),
+						check("it ended on the step budget", result.stopReason === "step_limit", result.stopReason),
+						check(
+							"Calculator is not frontmost at the end, so focus was never handed back",
+							front.bundleId !== BUNDLE,
+							String(front.bundleId),
+						),
+					],
+					metrics: { presses: calls, display, stopReason: result.stopReason, frontAtEnd: String(front.bundleId) },
+				};
+			} finally {
+				await driver.close();
+			}
+		},
+	},
+	{
 		id: "desktop-calculator-entry",
 		tier: "desktop",
 		category: "capability",
@@ -283,7 +353,7 @@ export const desktopScenarios: Scenario[] = [
 				const recorder = stepRecorder(context.outputDir, "desktop-calculator-entry");
 				const result = await runJev(
 					{ goal: DESKTOP_GOALS.enumerated, maxSteps: 16 },
-					{ driver, policy: context.jev(() => null, DESKTOP_RULES), onStep: recorder.onStep },
+					{ driver, policy: context.jev(() => null, DESKTOP_RULES), onStep: recorder.onStep, onFailure: recorder.onFailure },
 				);
 				const display = await displayText(driver);
 				const stepTargets = result.steps
@@ -340,6 +410,7 @@ export const desktopScenarios: Scenario[] = [
 						driver,
 						policy: context.jev(() => null, DESKTOP_RULES, { planning: true }),
 						onStep: recorder.onStep,
+						onFailure: recorder.onFailure,
 					},
 				);
 				const display = await displayText(driver);

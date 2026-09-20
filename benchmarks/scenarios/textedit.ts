@@ -33,8 +33,15 @@ async function freshDocument(driver: DesktopDriver) {
 		'tell application "TextEdit" to close every document saving no',
 		'tell application "TextEdit" to make new document',
 	);
-	for (let attempt = 0; attempt < 16; attempt++) {
+	// A busy machine can take several seconds to show the window; halfway through the
+	// budget the request is repeated in case the first one was swallowed by a dialog.
+	for (let attempt = 0; attempt < 40; attempt++) {
 		await sleep(250);
+		if (attempt === 20)
+			await osascript(
+				'tell application "TextEdit" to close every document saving no',
+				'tell application "TextEdit" to make new document',
+			);
 		try {
 			const snapshot = await driver.observe();
 			const area = snapshot.data.targets.find((target) => target.role === "AXTextArea");
@@ -129,7 +136,7 @@ export const texteditScenarios: Scenario[] = [
 						goal: `Type the sentence "${SENTENCE}" into the document of this text editor, then stop when the document shows it.`,
 						maxSteps: 6,
 					},
-					{ driver, policy: context.jev(() => SENTENCE, DESKTOP_RULES), onStep: recorder.onStep },
+					{ driver, policy: context.jev(() => SENTENCE, DESKTOP_RULES), onStep: recorder.onStep, onFailure: recorder.onFailure },
 				);
 				const text = await documentText(driver);
 				const executed = result.steps.filter((step) => step.status === "executed");

@@ -85,7 +85,7 @@ export interface Driver {
 	 */
 	readFailureCategory?(
 		error: unknown,
-	): "navigation_context" | "document_not_ready" | undefined;
+	): "navigation_context" | "document_not_ready" | "window_unavailable" | undefined;
 }
 
 /** The observation was invalidated before the action could run. */

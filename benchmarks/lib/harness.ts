@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { configPath, workingDir } from "./env.ts";
 import { AGENT_DIR, readConfig, readConfigFile } from "../../src/config.ts";
 import type { RunStep } from "../../src/loop.ts";
@@ -232,9 +233,14 @@ export function median(values: number[]): number | null {
  * instead of leaving only the application's final state to reason from.
  */
 export function stepRecorder(outputDir: string, name: string) {
+	void outputDir;
 	const steps: RunStep[] = [];
-	const tracePath = join(outputDir, `${name}.trace.jsonl`);
-	mkdirSync(outputDir, { recursive: true });
+	// Under benchmarks/results (ignored by git) rather than the temporary working
+	// directory, which is removed when the scenario ends: a trace that is deleted
+	// with the failure it explains is no use.
+	const traceDir = fileURLToPath(new URL("../results/traces/", import.meta.url));
+	const tracePath = join(traceDir, `${name}.trace.jsonl`);
+	mkdirSync(traceDir, { recursive: true });
 	writeFileSync(tracePath, "");
 	return {
 		steps,
@@ -242,6 +248,13 @@ export function stepRecorder(outputDir: string, name: string) {
 		async onStep(step: RunStep) {
 			steps.push(step);
 			appendFileSync(tracePath, `${JSON.stringify(step)}\n`);
+		},
+		/** The raw error and the stage it happened in, which the run result only summarises. */
+		async onFailure(error: unknown, stage: string) {
+			appendFileSync(
+				tracePath,
+				`${JSON.stringify({ type: "failure", stage, error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) })}\n`,
+			);
 		},
 		/** Executed targets in order, for a metric that survives the run's own summary. */
 		executed: () =>

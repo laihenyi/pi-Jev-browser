@@ -234,7 +234,10 @@ and the accessible name lives in `AXDescription` while the stable handle is
 `AXIdentifier` (Calculator publishes nothing in `AXTitle` and its multiply button is
 叫「乘」but identified as `Multiply`). Titlebar close/minimize/zoom buttons are
 excluded by subrole, since pressing close terminates an application that quits with
-its last window. Editable text (`AXTextArea`, `AXTextField`) carries no press action
+its last window. The surface identity is the driven application's process, not the
+frontmost application: accessibility actions land without focus, so a person
+switching windows mid-run changes nothing the loop acts on, while a quit or relaunch
+still stops it. Editable text (`AXTextArea`, `AXTextField`) carries no press action
 and is offered as a `TYPE_TEXT` target driven by setting its value; its content joins
 the window text, because for an editor the document is the state. Desktop driving
 is covered by the `desktop` benchmark tier on two applications: Calculator, verified
