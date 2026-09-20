@@ -1,7 +1,7 @@
 {
   "name": "pi-jev-browser",
   "version": "0.1.0",
-  "description": "Browser automation tools for pi: Jev (TypeSafe System One) chooses each action in a bounded DOM loop, with a deterministic selector layer for precise work.",
+  "description": "Browser agent for pi: Jev (TypeSafe System One) chooses each action from a DOM observation in a bounded, surface-agnostic loop, with a deterministic selector layer and a four-tier benchmark suite.",
   "license": "Apache-2.0",
   "type": "module",
   "repository": {
@@ -18,11 +18,16 @@
     "browser-automation",
     "playwright",
     "agent",
-    "jev"
+    "jev",
+    "typesafe",
+    "accessibility-tree",
+    "benchmark"
   ],
   "files": [
     "index.ts",
     "src/",
+    "desktop/ax-helper.swift",
+    "benchmarks/desktop-calibration.ts",
     "benchmarks/README.md",
     "benchmarks/run.ts",
     "benchmarks/lib/",

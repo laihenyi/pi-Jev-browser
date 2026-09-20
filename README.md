@@ -1,13 +1,36 @@
 # Pi Jev Browser
 
-Isolated Playwright browser tools for **pi**, with **Jev** (TypeSafe System One)
-choosing each browser action over a structured DOM observation instead of a
-screenshot-per-step loop.
+A browser agent for **pi**. **Jev** (TypeSafe System One) chooses each action
+from a structured observation of the page — visible text plus addressable
+controls, never a screenshot — inside a bounded loop that knows when it is
+stuck, when the page moved underneath it, and when to hand control back to a
+human. A deterministic selector layer covers the precise work, and a
+four-tier benchmark measures what the agent actually does instead of trusting a
+demo.
 
-This is a port of [`cline/plugins/plugins/jev-browser`](https://github.com/cline/plugins/tree/main/plugins/jev-browser)
-to the pi extension API. The observation pipeline, Jev prompt, run statuses, and
-safety contract are carried over; the host plumbing, the decision transport, and
-the text helper changed. See [Differences from the Cline plugin](#differences-from-the-cline-plugin).
+Three things are true about the code and worth knowing before the details:
+
+- **The pi tools are browser tools.** `jev_run`, `jev_actions`, `jev_extract`,
+  `jev_state`, `jev_logs`, `jev_stream` and `jev_stop` drive an isolated
+  Playwright Chromium. Nothing here controls the host desktop from pi.
+- **The decision loop does not know it is driving a browser.** `src/loop.ts`
+  depends on a `Driver` interface and imports no Playwright. Two drivers exist:
+  the browser DOM (`src/observe.ts`) and the macOS accessibility tree
+  (`src/drivers/desktop.ts` with a resident Swift helper). The second one is
+  exercised by the `desktop` benchmark tier, which drives real Calculator and
+  TextEdit windows through the same loop with the same guards. It is an
+  architecture proof with measurements, not yet a pi tool; see
+  [Where the loop ends and the surface begins](#where-the-loop-ends-and-the-surface-begins).
+- **Every claim in this README has a scenario behind it.** `benchmarks/README.md`
+  lists 22 scenarios across `local`, `model`, `live` and `desktop`, each verified
+  against a request log, a trace or an independent read, with the gaps that were
+  found written down and the two that were closed shown with the numbers.
+
+The project started as a port of
+[`cline/plugins/plugins/jev-browser`](https://github.com/cline/plugins/tree/main/plugins/jev-browser)
+to the pi extension API; see
+[Differences from the Cline plugin](#differences-from-the-cline-plugin) for what
+was carried over and what changed.
 
 ## Install
 
@@ -209,8 +232,10 @@ interface Driver {
   /** Identity of the surface; a change means the run moved and must not act. */
   id(): unknown;
   observe(signal?: AbortSignal): Promise<ObservationSnapshot>;
-  /** The driver's own vocabulary for read failures, e.g. a navigation context. */
-  readFailureCategory?(error: unknown): "navigation_context" | "document_not_ready" | undefined;
+  /** The driver's own vocabulary for read failures: a navigation context, a closed window. */
+  readFailureCategory?(
+    error: unknown,
+  ): "navigation_context" | "document_not_ready" | "window_unavailable" | undefined;
 }
 ```
 
@@ -280,7 +305,10 @@ tree, for example — means writing another driver, not rewriting the loop.
 - prompt guidelines covering prompt injection, sensitive data, and consequential
   actions
 
-This is a browser harness, not unrestricted control of the host desktop.
+From pi, this is a browser harness: no tool controls the host desktop. The macOS
+accessibility driver in this repository is reachable only from the benchmark
+suite and the calibration tool, on purpose, until it has the same confirmation
+and allow-list contract the browser tools have.
 
 ## Tools
 
@@ -288,6 +316,14 @@ This is a browser harness, not unrestricted control of the host desktop.
 - `jev_actions` — manual actions without Jev; returns an updated screenshot.
 - `jev_extract` — deterministic read of text, table rows, links, or an
   attribute, with no model call.
+- `jev_state` — tabs, current URL, title, viewport and start time, without a
+  screenshot.
+- `jev_logs` — captured console messages, page errors, failed requests,
+  navigations, blocked downloads and security blocks.
+- `jev_stream` — start, inspect or stop the tokenized live viewer on
+  `127.0.0.1`.
+- `jev_stop` — stop the browser and the stream, finalize the video, return
+  artifact paths.
 
 ### Element targets instead of coordinates
 
@@ -484,6 +520,12 @@ extension load, and `session_shutdown` closes any browser left open.
 
 ## Differences from the Cline plugin
 
+The observation pipeline, the Jev prompt, the run statuses and the safety
+contract were carried over from the Cline plugin; the host plumbing, the decision
+transport and the text helper changed, and everything from the `Driver` interface
+onward (the desktop driver, the planning phase, the verification gate, shadow DOM,
+the benchmark suite) was added here.
+
 | Area | Cline plugin | Pi Jev Browser |
 | --- | --- | --- |
 | Host API | `plugin.setup(api)` with JSON Schema `inputSchema` | `export default (pi)` with TypeBox `parameters` |
@@ -506,11 +548,13 @@ extension load, and `session_shutdown` closes any browser left open.
 
 ## Benchmarks
 
-`benchmarks/` is a repeatable capability suite in three tiers: `local` (offline
-fixtures, no credential), `model` (real Jev decisions on local pages), and `live`
-(third-party sites). Every scenario verifies its outcome against the fixture
-server's request log, the run trace, or an independent read, so a run cannot pass
-by claiming success.
+`benchmarks/` is a repeatable capability suite in four tiers: `local` (offline
+fixtures, no credential), `model` (real Jev decisions on local pages), `live`
+(third-party sites) and `desktop` (real macOS applications through the
+accessibility driver, on a Mac with the helper built). Every scenario verifies its
+outcome against the fixture server's request log, the run trace, the
+application's own reported state, or an independent read, so a run cannot pass by
+claiming success.
 
 ```bash
 npm run benchmark                   # local tier

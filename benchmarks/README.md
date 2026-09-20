@@ -1,7 +1,7 @@
 # Capability benchmark
 
-A repeatable suite that measures what this browser agent actually does, instead of
-trusting a single successful demo. Every scenario **verifies** its outcome — a
+A repeatable suite that measures what this agent actually does, in a browser and
+in macOS applications, instead of trusting a single successful demo. Every scenario **verifies** its outcome — a
 submitted form is confirmed in the server's request log, a clicked header link is
 confirmed against the run trace, a price is cross-checked with an independent
 read — so a run cannot pass by claiming success.
