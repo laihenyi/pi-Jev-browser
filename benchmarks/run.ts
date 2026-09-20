@@ -14,12 +14,14 @@ import { desktopScenarios } from "./scenarios/desktop.ts";
 import { localScenarios } from "./scenarios/local.ts";
 import { liveScenarios } from "./scenarios/live.ts";
 import { modelScenarios } from "./scenarios/model.ts";
+import { texteditScenarios } from "./scenarios/textedit.ts";
 
 const all: Scenario[] = [
 	...localScenarios,
 	...modelScenarios,
 	...liveScenarios,
 	...desktopScenarios,
+	...texteditScenarios,
 ];
 const byId = new Map(all.map((scenario) => [scenario.id, scenario]));
 const resultsDir = join(import.meta.dirname, "results");

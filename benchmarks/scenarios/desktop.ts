@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { runJev } from "../../src/loop.ts";
 import type { JevPolicy } from "../../src/policy.ts";
 import { defaultHelperPath, desktopDriver, DESKTOP_RULES, type DesktopDriver } from "../../src/drivers/desktop.ts";
-import { check, type Scenario } from "../lib/harness.ts";
+import { check, stepRecorder, type Scenario } from "../lib/harness.ts";
 
 /**
  * The desktop tier drives real macOS applications through their accessibility tree,
@@ -280,9 +280,10 @@ export const desktopScenarios: Scenario[] = [
 			try {
 				await driver.activate();
 				await reset(driver);
+				const recorder = stepRecorder(context.outputDir, "desktop-calculator-entry");
 				const result = await runJev(
 					{ goal: DESKTOP_GOALS.enumerated, maxSteps: 16 },
-					{ driver, policy: context.jev(() => null, DESKTOP_RULES) },
+					{ driver, policy: context.jev(() => null, DESKTOP_RULES), onStep: recorder.onStep },
 				);
 				const display = await displayText(driver);
 				const stepTargets = result.steps
@@ -305,10 +306,12 @@ export const desktopScenarios: Scenario[] = [
 					],
 					metrics: {
 						executedSteps: stepTargets.length,
+						executed: recorder.executed().join(" "),
 						stopReason: result.stopReason,
 						display,
 						expected: EXPECTED,
 						loopElapsedMs: result.elapsedMs,
+						tracePath: recorder.tracePath,
 					},
 				};
 			} finally {
@@ -330,9 +333,14 @@ export const desktopScenarios: Scenario[] = [
 			try {
 				await driver.activate();
 				await reset(driver);
+				const recorder = stepRecorder(context.outputDir, "desktop-goal-needs-a-plan");
 				const result = await runJev(
 					{ goal: DESKTOP_GOALS.short, maxSteps: 16 },
-					{ driver, policy: context.jev(() => null, DESKTOP_RULES, { planning: true }) },
+					{
+						driver,
+						policy: context.jev(() => null, DESKTOP_RULES, { planning: true }),
+						onStep: recorder.onStep,
+					},
 				);
 				const display = await displayText(driver);
 				const planIdentifiers = (result.plan ?? []).map(
@@ -354,10 +362,13 @@ export const desktopScenarios: Scenario[] = [
 					],
 					metrics: {
 						executedSteps: result.steps.filter((step) => step.status === "executed").length,
+						executed: recorder.executed().join(" "),
 						planSteps: result.plan?.length ?? 0,
 						stopReason: result.stopReason,
+						failure: result.failure ? JSON.stringify(result.failure) : null,
 						display,
 						expected: EXPECTED,
+						tracePath: recorder.tracePath,
 					},
 				};
 			} finally {

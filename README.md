@@ -230,8 +230,12 @@ and the accessible name lives in `AXDescription` while the stable handle is
 `AXIdentifier` (Calculator publishes nothing in `AXTitle` and its multiply button is
 叫「乘」but identified as `Multiply`). Titlebar close/minimize/zoom buttons are
 excluded by subrole, since pressing close terminates an application that quits with
-its last window. Desktop scraping and driving is covered by the `desktop` benchmark
-tier, which verifies an arithmetic result computed outside the application.
+its last window. Editable text (`AXTextArea`, `AXTextField`) carries no press action
+and is offered as a `TYPE_TEXT` target driven by setting its value; its content joins
+the window text, because for an editor the document is the state. Desktop driving
+is covered by the `desktop` benchmark tier on two applications: Calculator, verified
+by an arithmetic result computed outside the application, and TextEdit, verified by
+reading the document back from the application.
 
 The loop can also plan before it acts. `createJevPolicy({ planning: true })` adds a
 planning phase that runs once, against the initial observation: the same choice

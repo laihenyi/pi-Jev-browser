@@ -63,7 +63,9 @@ config file.
 
 The desktop tier drives an application through its accessibility tree with the
 same `runJev` loop the browser tier uses. Nothing in the loop knows the
-difference; only the driver does.
+difference; only the driver does. Two applications are covered so the recipe is
+shown to hold beyond the one it was calibrated on: Calculator is all buttons
+(`AXPress`), TextEdit is a text area driven by setting its value.
 
 | Scenario | Category | Asserts |
 | --- | --- | --- |
@@ -71,6 +73,8 @@ difference; only the driver does.
 | `desktop-repeat-guard` | regression | Six presses of one digit produce six different displays and are not stopped as a repeat. Regression for the guard that counted identical actions and killed a run that was making progress. |
 | `desktop-calculator-entry` | capability | Jev completing a ten-step entry, using the recipe the calibration tool found: an enumerated goal plus mechanical rules. |
 | `desktop-goal-needs-a-plan` | capability | The same task from a short goal. Jev plans the key sequence first (asserted step by step), then executes it. Formerly a documented gap — see below. |
+| `desktop-textedit-deterministic` | capability | A second application and a second kind of control: TextEdit's document is a text area with no press action, driven by setting its accessibility value. The sentence is read back from the application and must also appear in the window text. No model. |
+| `desktop-textedit-entry` | capability | Jev, with the rules calibrated on Calculator, picks the text area over sixteen formatting controls, types the requested sentence exactly once and stops. |
 
 Two things the tier learned about driving a desktop, both now fixed in the driver:
 
@@ -180,6 +184,15 @@ expression across a relaunch**, and after a completed calculation the first pres
 of the clear key only clears the entry. A run that started on top of the previous
 answer would pass on numbers it never entered, so both the scenarios and the
 calibration tool now clear until the display reads 0 and fail if it will not.
+
+A second one is recorded rather than explained: in one full-suite run out of nine,
+Calculator's window vanished mid-run (the application kept running with no window,
+and the display it restored on relaunch showed the run had reached the sixth press).
+Pressing every non-digit control by hand afterwards, including the tip banner's
+close button, the sidebar toggle and the mode button, left the window in place, so
+the cause is not established. Since then the desktop scenarios record every loop
+step to `<scenario>.trace.jsonl` in the benchmark working directory and report the
+executed sequence in their metrics, so a recurrence will say what was pressed.
 
 ## Known gaps, asserted on purpose
 

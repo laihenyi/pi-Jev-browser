@@ -1,7 +1,8 @@
-import { rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { configPath, workingDir } from "./env.ts";
 import { AGENT_DIR, readConfig, readConfigFile } from "../../src/config.ts";
+import type { RunStep } from "../../src/loop.ts";
 import type { JevPolicy } from "../../src/policy.ts";
 import { createJevPolicy } from "../../src/policy.ts";
 import { PiBrowserManager } from "../../src/runtime.ts";
@@ -223,6 +224,31 @@ export function median(values: number[]): number | null {
 	if (values.length === 0) return null;
 	const sorted = [...values].sort((a, b) => a - b);
 	return Math.round(sorted[Math.floor(sorted.length / 2)]);
+}
+
+/**
+ * Records every loop step for a scenario that drives `runJev` itself (the desktop
+ * tier has no manager writing a trace). A failed run then says what was pressed,
+ * instead of leaving only the application's final state to reason from.
+ */
+export function stepRecorder(outputDir: string, name: string) {
+	const steps: RunStep[] = [];
+	const tracePath = join(outputDir, `${name}.trace.jsonl`);
+	mkdirSync(outputDir, { recursive: true });
+	writeFileSync(tracePath, "");
+	return {
+		steps,
+		tracePath,
+		async onStep(step: RunStep) {
+			steps.push(step);
+			appendFileSync(tracePath, `${JSON.stringify(step)}\n`);
+		},
+		/** Executed targets in order, for a metric that survives the run's own summary. */
+		executed: () =>
+			steps
+				.filter((step) => step.status === "executed")
+				.map((step) => `${step.operation}:${step.target ?? ""}`),
+	};
 }
 
 /** The live session behind a host key, for verification and DOM assertions. */

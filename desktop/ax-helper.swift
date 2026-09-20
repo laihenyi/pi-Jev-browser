@@ -96,6 +96,12 @@ let pressableRoles: Set<String> = [
     "AXMenuButton", "AXLink", "AXDisclosureTriangle", "AXTab", "AXSegment",
 ]
 
+/// Editable text. These carry no press action, so a walk that only looked for
+/// AXPress never offered them: TextEdit's document was invisible to the driver.
+/// They are driven by setting AXValue, and their value is part of the window text
+/// because for an editor the document *is* the state.
+let textRoles: Set<String> = ["AXTextArea", "AXTextField", "AXComboBox", "AXSearchField"]
+
 /// Titlebar buttons carry these subroles. They are not part of the application's
 /// content, and pressing close terminates applications that quit with their last
 /// window, so they are never offered as targets.
@@ -107,6 +113,7 @@ func isInteractive(_ role: String, _ subrole: String, _ actions: [String]) -> Bo
     if windowControlSubroles.contains(subrole) { return false }
     if actions.contains(kAXPressAction) { return true }
     if pressableRoles.contains(role) { return true }
+    if textRoles.contains(role) { return true }
     return actions.contains("AXConfirm") || actions.contains("AXPick")
 }
 
@@ -135,6 +142,12 @@ func observe(bundleId: String) throws -> [String: Any] {
         let elementActions = actions(element)
         if isInteractive(role, subrole, elementActions) {
             let enabled = (attribute(element, kAXEnabledAttribute) as? Bool) ?? true
+            // Only document-like text joins the window text; a combo box's value ("12")
+            // is a control setting, not content, and it is still reported on the node.
+            if role == "AXTextArea" || role == "AXTextField",
+               let value = text(element, kAXValueAttribute), !value.isEmpty {
+                texts.append(String(value.prefix(2000)))
+            }
             nodes.append(
                 Node(
                     element: element,
