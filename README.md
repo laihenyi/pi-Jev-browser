@@ -147,6 +147,7 @@ are `done_unverified`, `blocked`, `needs_review`, `uncertain`, `step_limit`,
 | `model_done` | Jev reported DONE; the status is `done_unverified` because a claim is not proof. |
 | `model_blocked` | Jev reported BLOCKED: no supported action can progress. |
 | `model_review` | Jev reported REVIEW: the next step needs sensitive data, submits something, or crosses a safety barrier such as a CAPTCHA. |
+| `verification_gate` | The loop itself refused a human-verification gate before asking Jev: the page text announced a challenge and a control offered to pass it. Status is `needs_review`; hand the step to the user. |
 | `min_probability` | The selected choice fell below the requested `minProbability`. |
 | `step_limit` / `evaluation_limit` | The action or evaluation budget ran out. |
 | `repeated_action` | An identical action stopped producing new state (a control cycling between states it already produced), or ran 12 times in a row as a backstop. Repeated presses that keep producing new state are allowed, because entering `111` is legitimate input. |
@@ -510,11 +511,15 @@ npm run benchmark                   # local tier
 npm run benchmark -- --suite=all    # every tier, needs a credential and internet
 ```
 
-Latest results: 14 of 14 executable scenarios pass, with one documented gap
-reported as `GAP` rather than hidden — Jev's REVIEW rule stops at a real CAPTCHA
-because the widget is in an unobservable iframe, but it clicks straight through an
-ordinary DOM human-verification gate. `benchmarks/README.md` has the full table,
-measured metrics, and the list of what the suite deliberately does not measure.
+Latest results: every executable scenario passes, across the local, model, live and
+desktop tiers. Two scenarios used to be reported as `GAP` rather than hidden, and
+both were closed by a measured change rather than by rewording: the loop now
+refuses an ordinary DOM human-verification gate before asking Jev (it used to click
+straight through one, stopping at a real CAPTCHA only because the widget sits in an
+unobservable iframe), and the decision layer plans a multi-step desktop task from a
+short goal instead of needing the steps spelled out. `benchmarks/README.md` has the
+full table, measured metrics, and the list of what the suite deliberately does not
+measure.
 
 ## License
 

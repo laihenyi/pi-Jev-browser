@@ -385,3 +385,43 @@ test("a policy without a planner never sees a plan step", async () => {
 	);
 	assert.equal(steps.some((step) => step.status === "plan"), false);
 });
+
+test("a human-verification gate ends the run before the policy is consulted", async () => {
+	const fake = fakeDriver({
+		observations: [
+			observation({
+				title: "Human verification required",
+				text: "Confirm you are a person before continuing.",
+				targets: [target("I am a person"), target("Verify and continue")],
+			}),
+		],
+	});
+	let asked = 0;
+	const steps: RunStepLike[] = [];
+	const base = scripted([{ target: target("Verify and continue") }]);
+	const policy: JevPolicy = {
+		...base,
+		async choose(data, goal, history, signal) {
+			asked++;
+			return base.choose(data, goal, history, signal);
+		},
+		async plan() {
+			asked++;
+			return null;
+		},
+	};
+	const result = await runJev(
+		{ goal: "Complete the human verification check and continue" },
+		{ driver: fake.driver, policy, onStep: async (step) => void steps.push(step) },
+	);
+	assert.equal(result.status, "needs_review");
+	assert.equal(result.stopReason, "verification_gate");
+	assert.match(result.message, /Human verification/);
+	assert.match(result.message, /"I am a person"/);
+	assert.equal(asked, 0);
+	assert.equal(fake.executed.length, 0);
+	assert.deepEqual(
+		steps.map((step) => [step.operation, step.status, step.reason]),
+		[["REVIEW", "decision", "verification_gate"]],
+	);
+});

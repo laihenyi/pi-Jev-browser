@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Usage as ModelUsage } from "@earendil-works/pi-ai";
 import { type Driver, StaleObservationError } from "./driver.ts";
 import { failureCategory, describeError } from "./errors.ts";
+import { verificationGate } from "./gate.ts";
 import { type JevPolicy, plannedGoal } from "./policy.ts";
 
 export interface RunInput {
@@ -31,6 +32,7 @@ export type StopReason =
 	| "model_done"
 	| "model_blocked"
 	| "model_review"
+	| "verification_gate"
 	| "min_probability"
 	| "step_limit"
 	| "evaluation_limit"
@@ -205,6 +207,24 @@ export async function runJev(
 				text: snapshot.data.text,
 			};
 			try {
+				// A human-verification gate is refused before the policy is consulted: it is
+				// not a decision the model gets to make, and the trace says why the run ended.
+				const gate = verificationGate(snapshot.data);
+				if (gate) {
+					await options.onStep?.({
+						step,
+						operation: "REVIEW",
+						target: gate.target,
+						status: "decision",
+						reason: "verification_gate",
+						latencyMs: 0,
+					});
+					return finish(
+						"needs_review",
+						`The page presents a human-verification gate (${JSON.stringify(gate.phrase)}, with a control labelled ${JSON.stringify(gate.target)}). Jev does not complete verification challenges; hand this step to the user.`,
+						"verification_gate",
+					);
+				}
 				if (!planned && policy.plan) {
 					// Plan once, from the initial state, before anything is acted on. A plan
 					// that could not be made leaves the goal as the user wrote it.
