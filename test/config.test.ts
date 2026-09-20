@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { isUrlAllowed, readConfig } from "../src/config.ts";
+import { isBundleIdAllowed, isUrlAllowed, readConfig } from "../src/config.ts";
 
 test("matches configured origins and blocks unsupported schemes", () => {
 	const patterns = ["https://*.example.com", "http://localhost:*"];
@@ -70,6 +70,31 @@ test("reports unreadable or malformed configuration instead of silently defaulti
 		assert.throws(() => readConfig(path), /is not valid JSON/);
 		writeFileSync(path, JSON.stringify([1, 2, 3]));
 		assert.throws(() => readConfig(path), /must contain a JSON object/);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("the desktop tool is closed by default and opens only to listed bundle ids", () => {
+	const closed = readConfig(join(tmpdir(), "missing-pi-jev-browser.config.json"));
+	assert.deepEqual(closed.desktop, { allowedBundleIds: [], requireConfirmation: true });
+	assert.equal(isBundleIdAllowed("com.apple.calculator", closed.desktop.allowedBundleIds), false);
+
+	const directory = mkdtempSync(join(tmpdir(), "pi-jev-browser-config-"));
+	const path = join(directory, "config.json");
+	try {
+		writeFileSync(
+			path,
+			JSON.stringify({ desktop: { allowedBundleIds: ["com.apple.calculator", " com.example.* "], requireConfirmation: false } }),
+		);
+		const config = readConfig(path);
+		assert.deepEqual(config.desktop, {
+			allowedBundleIds: ["com.apple.calculator", "com.example.*"],
+			requireConfirmation: false,
+		});
+		assert.equal(isBundleIdAllowed("com.apple.calculator", config.desktop.allowedBundleIds), true);
+		assert.equal(isBundleIdAllowed("com.example.notes", config.desktop.allowedBundleIds), true);
+		assert.equal(isBundleIdAllowed("com.apple.TextEdit", config.desktop.allowedBundleIds), false);
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}

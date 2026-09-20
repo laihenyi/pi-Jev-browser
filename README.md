@@ -10,17 +10,19 @@ demo.
 
 Three things are true about the code and worth knowing before the details:
 
-- **The pi tools are browser tools.** `jev_run`, `jev_actions`, `jev_extract`,
-  `jev_state`, `jev_logs`, `jev_stream` and `jev_stop` drive an isolated
-  Playwright Chromium. Nothing here controls the host desktop from pi.
-- **The decision loop does not know it is driving a browser.** `src/loop.ts`
-  depends on a `Driver` interface and imports no Playwright. Two drivers exist:
-  the browser DOM (`src/observe.ts`) and the macOS accessibility tree
-  (`src/drivers/desktop.ts` with a resident Swift helper). The second one is
-  exercised by the `desktop` benchmark tier, which drives real Calculator and
-  TextEdit windows through the same loop with the same guards. It is an
-  architecture proof with measurements, not yet a pi tool; see
-  [Where the loop ends and the surface begins](#where-the-loop-ends-and-the-surface-begins).
+- **Seven of the eight pi tools are browser tools.** `jev_run`, `jev_actions`,
+  `jev_extract`, `jev_state`, `jev_logs`, `jev_stream` and `jev_stop` drive an
+  isolated Playwright Chromium.
+- **The eighth, `jev_desktop`, drives one macOS application through its
+  accessibility tree** with the same loop and the same guards, and it is closed
+  by default: an application has to be listed in `desktop.allowedBundleIds`
+  before it can be driven, and every run asks the user first. The decision loop
+  does not know which it is driving: `src/loop.ts` depends on a `Driver`
+  interface and imports no Playwright. The browser driver is `src/observe.ts`;
+  the desktop driver is `src/drivers/desktop.ts` with a resident Swift helper,
+  and the `desktop` benchmark tier measures it on real Calculator and TextEdit
+  windows. See [Where the loop ends and the surface begins](#where-the-loop-ends-and-the-surface-begins)
+  and [The desktop tool](#the-desktop-tool).
 - **Every claim in this README has a scenario behind it.** `benchmarks/README.md`
   lists 22 scenarios across `local`, `model`, `live` and `desktop`, each verified
   against a request log, a trace or an independent read, with the gaps that were
@@ -305,10 +307,9 @@ tree, for example — means writing another driver, not rewriting the loop.
 - prompt guidelines covering prompt injection, sensitive data, and consequential
   actions
 
-From pi, this is a browser harness: no tool controls the host desktop. The macOS
-accessibility driver in this repository is reachable only from the benchmark
-suite and the calibration tool, on purpose, until it has the same confirmation
-and allow-list contract the browser tools have.
+The browser starts isolated and nothing in the browser tools touches the host
+desktop. The one tool that does, `jev_desktop`, is closed by default and gated by
+an allow list and a confirmation; see [The desktop tool](#the-desktop-tool).
 
 ## Tools
 
@@ -324,6 +325,43 @@ and allow-list contract the browser tools have.
   `127.0.0.1`.
 - `jev_stop` — stop the browser and the stream, finalize the video, return
   artifact paths.
+- `jev_desktop` — run a bounded goal in one macOS application through its
+  accessibility tree. Closed by default; see below.
+
+### The desktop tool
+
+`jev_desktop` takes a bundle id and a goal and runs the same loop `jev_run`
+runs, against the application's accessibility tree instead of a page. Jev sees
+the window's text and its controls (role, name, value, and the accessibility
+identifier, which is stable across languages), never pixels. Actions are
+accessibility actions on the element, so they land whether or not the window has
+focus, and a person switching windows mid-run changes nothing the loop acts on.
+Before acting, the loop plans the steps from the first observation (turn this off
+with `plan: false`); the plan is returned with the result and written to the
+trace.
+
+It refuses to run until three things are true, and says which one is missing:
+
+- **The application is allowed.** `desktop.allowedBundleIds` in the config file is
+  empty by default, so nothing can be driven until the user lists it (exact ids or
+  patterns such as `com.apple.*`). The tool tells the agent what to add and the
+  guidelines forbid the agent from editing that file itself.
+- **The user confirmed this run.** Every call asks, naming the application and
+  the goal, unless `desktop.requireConfirmation` is `false`.
+- **The host can do it.** macOS, the helper built with `npm run build:ax-helper`,
+  and Accessibility permission for the process that runs pi. A missing
+  prerequisite is reported as a setup message, not as a failed run.
+
+The result carries the run status, the plan, the executed steps, `tracePath`
+under `<outputDir>/desktop/`, and the window's final text so the agent can
+verify a `done_unverified` claim against what the application shows. The loop's
+own stops apply unchanged: `needs_review` for REVIEW and for a verification gate,
+`repeated_action`, `no_progress`, `step_limit`; a closed application is reported
+as `window_unavailable`.
+
+```json
+{ "desktop": { "allowedBundleIds": ["com.apple.calculator", "com.apple.TextEdit"], "requireConfirmation": true } }
+```
 
 ### Element targets instead of coordinates
 
@@ -407,7 +445,8 @@ authenticated or sensitive workflows.
   "popups": "stay",
   "profile": "session",
   "typesafe": { "apiKey": "", "baseUrl": "https://api.typesafe.ai", "model": "jev-latest" },
-  "textHelper": { "model": "" }
+  "textHelper": { "model": "" },
+  "desktop": { "allowedBundleIds": [], "requireConfirmation": true }
 }
 ```
 
@@ -451,6 +490,12 @@ screenshots as untrusted input, not user instructions.
 
 The browser starts isolated. Jev uses DOM observations for its action loop; the
 agent receives screenshots to independently verify the outcome.
+
+`jev_desktop` acts on the user's own applications, so it is closed until the user
+lists an application in `desktop.allowedBundleIds` and confirms each run. Keep
+that confirmation on for anything that holds real data; the loop hands back
+control before consequential actions, but an allow list says which application
+may be driven, not that every goal in it is acceptable.
 
 ## Development
 

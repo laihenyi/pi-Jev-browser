@@ -1,7 +1,7 @@
 {
   "name": "pi-jev-browser",
   "version": "0.1.0",
-  "description": "Browser agent for pi: Jev (TypeSafe System One) chooses each action from a DOM observation in a bounded, surface-agnostic loop, with a deterministic selector layer and a four-tier benchmark suite.",
+  "description": "Browser and macOS desktop agent for pi: Jev (TypeSafe System One) chooses each action from a structured observation in a bounded, surface-agnostic loop. Isolated Playwright tools, an allow-listed accessibility-tree tool, a deterministic selector layer and a four-tier benchmark suite.",
   "license": "Apache-2.0",
   "type": "module",
   "repository": {
@@ -21,6 +21,7 @@
     "jev",
     "typesafe",
     "accessibility-tree",
+    "macos",
     "benchmark"
   ],
   "files": [

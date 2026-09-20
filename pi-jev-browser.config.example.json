@@ -27,5 +27,9 @@
   },
   "textHelper": {
     "model": ""
+  },
+  "desktop": {
+    "allowedBundleIds": [],
+    "requireConfirmation": true
   }
 }

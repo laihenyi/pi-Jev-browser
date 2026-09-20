@@ -25,6 +25,7 @@ const DEFAULT_CONFIG: PiBrowserConfig = {
 	popups: "stay",
 	profile: "session",
 	profileDir: join(AGENT_DIR, "pi-jev-browser-profile"),
+	desktop: { allowedBundleIds: [], requireConfirmation: true },
 };
 
 export function readConfigFile(path = CONFIG_PATH): Record<string, unknown> {
@@ -104,7 +105,24 @@ export function readConfig(path = CONFIG_PATH): PiBrowserConfig {
 			typeof raw.profileDir === "string" && raw.profileDir.trim()
 				? resolve(expandHome(raw.profileDir))
 				: DEFAULT_CONFIG.profileDir,
+		desktop: {
+			allowedBundleIds: originList(
+				raw.desktop?.allowedBundleIds,
+				DEFAULT_CONFIG.desktop.allowedBundleIds,
+			).map((id) => id.trim()),
+			requireConfirmation: raw.desktop?.requireConfirmation !== false,
+		},
 	};
+}
+
+/** Bundle ids match exactly or by a trailing `*`, as origins do: `com.apple.*`. */
+export function isBundleIdAllowed(bundleId: string, patterns: string[]): boolean {
+	return patterns.some((pattern) => {
+		const normalized = pattern.trim();
+		if (!normalized) return false;
+		const expression = `^${escapeRegExp(normalized).replaceAll("\\*", ".*")}$`;
+		return new RegExp(expression, "i").test(bundleId);
+	});
 }
 
 function originList(value: unknown, fallback: string[]) {

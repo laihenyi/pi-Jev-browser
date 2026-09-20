@@ -46,6 +46,7 @@ test("registers the complete Pi Jev Browser tool surface", () => {
 			"jev_logs",
 			"jev_stream",
 			"jev_stop",
+			"jev_desktop",
 		],
 	);
 	for (const tool of tools) {
@@ -169,4 +170,19 @@ test("jev_state and jev_stop accept only an empty object", () => {
 		assert.equal(Value.Check(schema, {}), true);
 		assert.equal(Value.Check(schema, { unexpected: true }), false);
 	}
+});
+
+test("jev_desktop is strict about its arguments and carries the desktop contract", () => {
+	const { tools } = loadExtension();
+	const tool = toolNamed(tools, "jev_desktop");
+	assert.ok(Value.Check(tool.parameters, { bundleId: "com.apple.calculator", goal: "Compute 2 + 2" }));
+	assert.equal(Value.Check(tool.parameters, { goal: "no bundle id" }), false);
+	assert.equal(Value.Check(tool.parameters, { bundleId: "com.apple.calculator", goal: "x", url: "https://a" }), false);
+	const joined = (tool.promptGuidelines ?? []).join("\n");
+	assert.match(joined, /untrusted/);
+	assert.match(joined, /allowedBundleIds|allowed in the user's configuration/);
+	assert.match(joined, /needs_review/);
+	assert.match(joined, /done_unverified/);
+	assert.match(joined, /never edit that file yourself/);
+	assert.match(tool.description, /Closed by default/);
 });
