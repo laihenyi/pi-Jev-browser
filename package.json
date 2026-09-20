@@ -1,6 +1,6 @@
 {
   "name": "pi-jev-browser",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Browser and macOS desktop agent for pi: Jev (TypeSafe System One) chooses each action from a structured observation in a bounded, surface-agnostic loop. Isolated Playwright tools, an allow-listed accessibility-tree tool, a deterministic selector layer and a four-tier benchmark suite.",
   "license": "Apache-2.0",
   "type": "module",
@@ -36,6 +36,7 @@
     "test/",
     "pi-jev-browser.config.example.json",
     "README.md",
+    "README.zh-TW.md",
     "LICENSE",
     "tsconfig.json"
   ],
