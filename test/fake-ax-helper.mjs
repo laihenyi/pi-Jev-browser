@@ -8,6 +8,8 @@ import { createInterface } from "node:readline";
 const logPath = process.env.FAKE_AX_LOG;
 const nodes = JSON.parse(process.env.FAKE_AX_NODES ?? "[]");
 let signature = process.env.FAKE_AX_SIGNATURE ?? "sig-1";
+// A cold start: this many observations find no window before the first one does.
+let noWindowCalls = Number(process.env.FAKE_AX_NO_WINDOW_CALLS ?? 0);
 const frontBundle = process.env.FAKE_AX_FRONT ?? "com.test.app";
 
 const respond = (payload) => process.stdout.write(`${JSON.stringify(payload)}\n`);
@@ -40,6 +42,11 @@ lines.on("line", (line) => {
 			respond({ ok: true });
 			return;
 		case "observe":
+			if (noWindowCalls > 0) {
+				noWindowCalls--;
+				respond({ ok: false, error: `application ${request.bundleId} has no window` });
+				return;
+			}
 			respond({
 				ok: true,
 				bundleId: request.bundleId,
@@ -52,6 +59,15 @@ lines.on("line", (line) => {
 			});
 			return;
 		case "press":
+			// A press that takes effect and kills its own control: the gallery button
+			// that closes the gallery. The helper reports the AX error, the window
+			// has already moved on.
+			if (process.env.FAKE_AX_PRESS_ERROR && request.signature === signature) {
+				if (process.env.FAKE_AX_NEXT_SIGNATURE) signature = process.env.FAKE_AX_NEXT_SIGNATURE;
+				respond({ ok: false, error: process.env.FAKE_AX_PRESS_ERROR });
+				return;
+			}
+		// falls through
 		case "setvalue":
 			if (request.signature !== signature) {
 				respond({ ok: false, error: "surface changed since the observation" });

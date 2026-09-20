@@ -5,13 +5,14 @@ import { join } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
 import { readConfig } from "../src/config.ts";
-import { assertDesktopPrerequisites, runDesktop } from "../src/desktop-runtime.ts";
+import { assertDesktopPrerequisites, runDesktop, waitForWindow } from "../src/desktop-runtime.ts";
+import { desktopDriver } from "../src/drivers/desktop.ts";
 import type { JevPolicy } from "../src/policy.ts";
 
 /**
- * The desktop tool's runtime against the fake helper: the allow list, the
- * permission check and the run shape are covered without macOS, Accessibility
- * permission or a GUI application.
+ * The desktop tool's runtime against the fake helper: the prerequisite checks,
+ * the permission check and the run shape are covered without macOS,
+ * Accessibility permission or a GUI application.
  */
 
 const helperPath = fileURLToPath(new URL("./fake-ax-helper.mjs", import.meta.url));
@@ -23,7 +24,7 @@ const NODES = [
 	{ index: 1, role: "AXButton", name: "=", value: "", identifier: "Equals", enabled: true, actions: ["AXPress"] },
 ];
 
-function configWith(desktop: { allowedBundleIds?: string[]; requireConfirmation?: boolean }) {
+function configWith(desktop: { requireConfirmation?: boolean } = {}) {
 	const base = readConfig(join(directory, "missing.json"));
 	return { ...base, outputDir: directory, desktop: { ...base.desktop, ...desktop } };
 }
@@ -42,42 +43,57 @@ const scripted = (operations: string[]): JevPolicy => {
 	};
 };
 
-test("nothing can be driven until its bundle id is allowed", () => {
-	assert.throws(
-		() => assertDesktopPrerequisites({ bundleId: "com.test.app" }, configWith({}), { helperPath, platform: "darwin" }),
-		/closed by default[\s\S]*allowedBundleIds/,
-	);
-	assert.throws(
-		() =>
-			assertDesktopPrerequisites(
-				{ bundleId: "com.other.app" },
-				configWith({ allowedBundleIds: ["com.test.app"] }),
-				{ helperPath, platform: "darwin" },
-			),
-		/not in desktop\.allowedBundleIds \(com\.test\.app\)/,
+test("any bundle id passes the prerequisites; the host, helper and id shape are still checked", () => {
+	// No allow list: an application the user never named in the config is fine.
+	assert.equal(
+		assertDesktopPrerequisites({ bundleId: "com.never.listed" }, configWith(), { helperPath, platform: "darwin" }),
+		helperPath,
 	);
 	assert.throws(
 		() =>
 			assertDesktopPrerequisites(
 				{ bundleId: "Calculator" },
-				configWith({ allowedBundleIds: ["*"] }),
+				configWith(),
 				{ helperPath, platform: "darwin" },
 			),
 		/not a bundle id/,
 	);
 	assert.throws(
-		() => assertDesktopPrerequisites({ bundleId: "com.test.app" }, configWith({ allowedBundleIds: ["*"] }), { helperPath, platform: "linux" }),
+		() => assertDesktopPrerequisites({ bundleId: "com.test.app" }, configWith(), { helperPath, platform: "linux" }),
 		/only available on macOS/,
 	);
 	assert.throws(
 		() =>
 			assertDesktopPrerequisites(
 				{ bundleId: "com.test.app" },
-				configWith({ allowedBundleIds: ["*"] }),
+				configWith(),
 				{ helperPath: join(directory, "missing-helper"), platform: "darwin" },
 			),
 		/npm run build:ax-helper/,
 	);
+});
+
+test("a cold start waits for the first window instead of observing the gap", async () => {
+	const log = join(directory, "cold-start.jsonl");
+	Object.assign(process.env, { FAKE_AX_NODES: JSON.stringify(NODES), FAKE_AX_LOG: log, FAKE_AX_NO_WINDOW_CALLS: "3" });
+	const driver = desktopDriver({ bundleId: "com.test.app", helperPath });
+	try {
+		assert.equal(await waitForWindow(driver, "com.test.app", 5_000, 10), true);
+		const calls = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line).request.cmd);
+		assert.deepEqual(calls, ["observe", "observe", "observe", "observe"]);
+		// The deadline still bounds an application that never shows a window.
+		process.env.FAKE_AX_NO_WINDOW_CALLS = "1000";
+		const late = desktopDriver({ bundleId: "com.test.app", helperPath });
+		try {
+			assert.equal(await waitForWindow(late, "com.test.app", 100, 10), false);
+		} finally {
+			await late.close?.();
+		}
+	} finally {
+		delete process.env.FAKE_AX_NO_WINDOW_CALLS;
+		delete process.env.FAKE_AX_LOG;
+		await driver.close?.();
+	}
 });
 
 test("a process without Accessibility permission is told how to grant it", async () => {
@@ -88,7 +104,7 @@ test("a process without Accessibility permission is told how to grant it", async
 				{ bundleId: "com.test.app", goal: "Press 1" },
 				{ sessionId: "t" },
 				scripted(["DONE"]),
-				configWith({ allowedBundleIds: ["com.test.app"] }),
+				configWith(),
 				{ helperPath, platform: "darwin" },
 			),
 			/Privacy & Security › Accessibility/,
@@ -112,7 +128,7 @@ test("a run drives the application, writes a trace and returns the final window"
 		{ bundleId: "com.test.app", goal: "Press 1, then equals" },
 		{ sessionId: "t", onEvent: (type) => void events.push(type) },
 		scripted(["One", "DONE"]),
-		configWith({ allowedBundleIds: ["com.test.*"] }),
+		configWith(),
 		{ helperPath, platform: "darwin" },
 	);
 	assert.equal(result.status, "done_unverified");

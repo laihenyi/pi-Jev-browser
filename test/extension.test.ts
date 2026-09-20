@@ -59,6 +59,18 @@ test("registers the complete Pi Jev Browser tool surface", () => {
 	assert.deepEqual(events, ["session_shutdown"]);
 });
 
+test("tool schemas serialize as plain root objects for OpenAI-compatible providers", () => {
+	const { tools } = loadExtension();
+	for (const tool of tools) {
+		const schema = JSON.parse(JSON.stringify(tool.parameters));
+		assert.equal(schema.type, "object", `${tool.name} needs a root object type`);
+		assert.equal(typeof schema.properties, "object", `${tool.name} needs root properties`);
+		assert.equal(schema.additionalProperties, false);
+		for (const keyword of ["anyOf", "oneOf", "allOf"])
+			assert.equal(schema[keyword], undefined, `${tool.name} must not use root ${keyword}`);
+	}
+});
+
 test("jev_run guidelines carry the safety contract and name their tools", () => {
 	const { tools } = loadExtension();
 	const guidelines = toolNamed(tools, "jev_run").promptGuidelines ?? [];
@@ -176,13 +188,60 @@ test("jev_desktop is strict about its arguments and carries the desktop contract
 	const { tools } = loadExtension();
 	const tool = toolNamed(tools, "jev_desktop");
 	assert.ok(Value.Check(tool.parameters, { bundleId: "com.apple.calculator", goal: "Compute 2 + 2" }));
-	assert.equal(Value.Check(tool.parameters, { goal: "no bundle id" }), false);
+	// A display name is accepted: the caller cannot know another machine's ids.
+	assert.ok(Value.Check(tool.parameters, { bundleId: "Microsoft Word", goal: "Type a story" }));
+	// Discovery is the other half: ask what is installed instead of guessing.
+	assert.ok(Value.Check(tool.parameters, { findApp: "word" }));
 	assert.equal(Value.Check(tool.parameters, { bundleId: "com.apple.calculator", goal: "x", url: "https://a" }), false);
+	for (const input of [
+		{ findApp: "" },
+		{ findApp: "x".repeat(201) },
+		{ bundleId: "ab", goal: "x" },
+		{ bundleId: "x".repeat(201), goal: "x" },
+		{ bundleId: "Calculator", goal: "" },
+		{ bundleId: "Calculator", goal: "x".repeat(12001) },
+		{ bundleId: "Calculator", goal: "x", maxSteps: 0 },
+		{ bundleId: "Calculator", goal: "x", maxSteps: 61 },
+		{ bundleId: "Calculator", goal: "x", timeoutMs: 999 },
+		{ bundleId: "Calculator", goal: "x", timeoutMs: 600001 },
+		{ bundleId: "Calculator", goal: "x", minProbability: -0.1 },
+		{ bundleId: "Calculator", goal: "x", minProbability: 1.1 },
+	]) assert.equal(Value.Check(tool.parameters, input), false, JSON.stringify(input));
 	const joined = (tool.promptGuidelines ?? []).join("\n");
 	assert.match(joined, /untrusted/);
-	assert.match(joined, /allowedBundleIds|allowed in the user's configuration/);
 	assert.match(joined, /needs_review/);
 	assert.match(joined, /done_unverified/);
-	assert.match(joined, /never edit that file yourself/);
-	assert.match(tool.description, /Closed by default/);
+	// No allow list: any application can be driven, so consent comes from the
+	// prompt, which is not the agent's to bypass or switch off.
+	assert.doesNotMatch(joined, /allowedBundleIds/);
+	assert.match(joined, /never work around it/i);
+	assert.match(joined, /never turn desktop\.requireConfirmation off/i);
+	assert.doesNotMatch(tool.description, /Closed by default|allowedBundleIds/);
+});
+
+test("jev_desktop rejects incomplete or mixed modes before reading config or touching desktop state", async () => {
+	const { tools } = loadExtension();
+	const tool = toolNamed(tools, "jev_desktop");
+	const execute = tool.execute as (id: string, params: unknown) => Promise<unknown>;
+	for (const input of [
+		{},
+		{ goal: "no bundle id" },
+		{ bundleId: "Calculator" },
+		{ launch: true },
+		{ findApp: "word", goal: "x" },
+		{ findApp: "word", bundleId: "Microsoft Word", goal: "x" },
+		...Object.entries({ launch: false, activate: false, plan: false, maxSteps: 1, timeoutMs: 1000, minProbability: 0 })
+			.map(([key, value]) => ({ findApp: "word", [key]: value })),
+		null,
+		{ findApp: "" },
+		{ findApp: "word", extra: true },
+	]) {
+		// No context is supplied: these must fail at the argument gate, before
+		// any credential lookup, app discovery, confirmation, or run can occur.
+		await assert.rejects(
+			() => execute("invalid-desktop-input", input),
+			/jev_desktop requires either findApp alone, or bundleId and goal/,
+			JSON.stringify(input),
+		);
+	}
 });

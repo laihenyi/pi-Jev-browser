@@ -476,6 +476,13 @@ test("field text comes from the goal as candidates for Jev to choose from", asyn
 	assert.ok(!searchBox.some((c) => c.endsWith(".com")), "only an address bar gets .com forms");
 	assert.ok(searchBox.includes("TMB 環山路徑的介紹影片"), "runs of tokens inside a sentence are offered");
 	assert.ok(searchBox.includes("點選 YouTube") && searchBox.includes("YouTube"));
+	// A document gets the story whole, first; a search box still gets clauses.
+	const story = "從前有個小女孩，大家都叫她小紅帽。有一天，媽媽要她送點心給奶奶。她在森林裡遇見了大野狼。";
+	const documentGoal = `在 Word 的文件內容區輸入以下故事全文：\n${story}\n輸入完成即結束。`;
+	const page = textCandidates(documentGoal, { label: "文件1", value: "", role: "AXLayoutArea" });
+	assert.equal(page[0], story, "a document is offered the whole passage first");
+	assert.ok(page.includes("從前有個小女孩"), "and still the clauses after it");
+	assert.ok(!textCandidates(documentGoal, { label: "搜尋", value: "" }).includes(story), "a plain field is not offered a passage");
 	const quoted = textCandidates('Search for "wool socks" and open the first result', { label: "Search", value: "" });
 	assert.equal(quoted[0], "wool socks", "a quoted phrase is the first candidate");
 	assert.ok(textCandidates("Type it", { label: "Search", value: "Type it" }).indexOf("Type it") < 0, "the current value is not offered again");

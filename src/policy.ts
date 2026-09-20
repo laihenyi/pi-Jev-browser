@@ -173,6 +173,10 @@ export const MAX_TEXT_CANDIDATES = 24;
 const ADDRESS_FIELD = /address|url|location|網址|搜尋欄位|omnibox|WEB_BROWSER_ADDRESS/i;
 const LATIN_WORD = /^[A-Za-z][A-Za-z0-9-]{1,}$/;
 
+/** Multi-line editors: a document canvas, a text area. A passage belongs there whole. */
+const PASSAGE_ROLES = new Set(["AXLayoutArea", "AXTextArea"]);
+const MAX_PASSAGE_LENGTH = 4000;
+
 /**
  * Phrases from the goal that could be typed into `target`: quoted phrases, the
  * goal's sentences, every contiguous run of their whitespace tokens, and, for an
@@ -198,6 +202,20 @@ export function textCandidates(
 	// addresses are offered there, so "open YouTube, then search for X" cannot turn
 	// into a web search for X from the address bar. A goal with no site name falls
 	// through to the general candidates.
+	// A document takes a passage, not a field value: a goal that carries a story
+	// or a paragraph offers each such line whole, ahead of its sentences, so the
+	// text is typed once rather than one clause at a time. A line counts as a
+	// passage when it runs to more than one sentence.
+	if (target.role !== undefined && PASSAGE_ROLES.has(target.role)) {
+		for (const line of goal.split(/\n+/)) {
+			const passage = line.trim();
+			const sentences = passage.match(/[。！？.!?]/g)?.length ?? 0;
+			if (sentences < 2 || passage.length > MAX_PASSAGE_LENGTH) continue;
+			if (seen.has(passage) || passage === target.value) continue;
+			seen.add(passage);
+			out.push(passage);
+		}
+	}
 	if (ADDRESS_FIELD.test(`${target.label} ${target.identifier ?? ""}`)) {
 		for (const token of goal.split(/[^A-Za-z0-9.:/-]+/)) {
 			if (/^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+(\/\S*)?$/i.test(token) || /^https?:\/\//i.test(token)) add(token);

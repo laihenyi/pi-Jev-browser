@@ -61,7 +61,9 @@ interface RawNode {
 const SETTLE_INTERVAL_MS = 300;
 const SETTLE_BUDGET_MS = 2_500;
 
-const TEXT_ROLES = new Set(["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]);
+// AXLayoutArea is a document the application draws itself (Word's page): the
+// helper offers it as a text target read by OCR and typed into by keyboard.
+const TEXT_ROLES = new Set(["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXLayoutArea"]);
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 export function defaultHelperPath() {
@@ -272,9 +274,12 @@ export function desktopDriver(options: DesktopDriverOptions): DesktopDriver {
 					if (response.ok === true) return;
 					// AXError -25204 (cannot complete) is the app not answering in time,
 					// not the app refusing: Safari blocks on a new tab until the page
-					// starts loading. If the window has changed since the observation the
-					// press landed; only an unchanged window makes it a failure.
-					if (/-25204|cannot complete/i.test(String(response.error))) {
+					// starts loading. AXError -25205 (invalid element) is the control
+					// going away as a result of the press: Word's template gallery closes
+					// the moment "Blank Document" is pressed and the button dies with it.
+					// If the window has changed since the observation the press landed;
+					// only an unchanged window makes it a failure.
+					if (/-2520[45]|cannot complete|invalid.*element/i.test(String(response.error))) {
 						await sleep(500);
 						const after = await rawObserve();
 						if (after.signature !== raw.signature) return;

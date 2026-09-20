@@ -110,6 +110,11 @@ struct Node {
         Node(element: element, index: index, role: role, subrole: subrole, name: name, value: value,
              identifier: identifier, enabled: enabled, actions: actions, frame: frame)
     }
+
+    func revalued(_ value: String) -> Node {
+        Node(element: element, index: index, role: role, subrole: subrole, name: name, value: value,
+             identifier: identifier, enabled: enabled, actions: actions, frame: frame)
+    }
 }
 
 let pressableRoles: Set<String> = [
@@ -178,6 +183,43 @@ let shellRoles: Set<String> = ["AXRow", "AXCell"]
 let maxShells = 60
 let mouseClickAction = "MouseClick"
 
+/// A document drawn by the application itself. Word's page is one AXLayoutArea
+/// with no value, no actions and no children: the text on it exists only on
+/// screen, and the only way in is the keyboard. Such a canvas is offered as a
+/// text target whose value is what the recogniser reads off it, and typing into
+/// it is a click to place the caret followed by keyboard events.
+let documentRoles: Set<String> = ["AXLayoutArea"]
+let typeTextAction = "TypeText"
+let maxCanvases = 4
+
+/// Types a string into one process as keyboard events carrying Unicode, so any
+/// script goes in without a keyboard layout; a line break is the Return key.
+func typeUnicode(pid: pid_t, _ value: String) {
+    for line in value.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+        if line.offset > 0 { pressReturn(pid: pid); usleep(40_000) }
+        var chunk: [UniChar] = []
+        func flush() {
+            guard !chunk.isEmpty,
+                  let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+            else { chunk.removeAll(); return }
+            down.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+            up.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+            down.postToPid(pid)
+            usleep(8_000)
+            up.postToPid(pid)
+            usleep(12_000)
+            chunk.removeAll()
+        }
+        for character in line.element {
+            let units = Array(String(character).utf16)
+            if chunk.count + units.count > 16 { flush() }
+            chunk.append(contentsOf: units)
+        }
+        flush()
+    }
+}
+
 struct Collected {
     let app: NSRunningApplication
     let window: AXUIElement
@@ -209,6 +251,7 @@ func collect(bundleId: String) throws -> Collected {
     var nodes: [Node] = []
     var texts: [String] = []
     var shells: [(element: AXUIElement, role: String, subrole: String, frame: (x: Int, y: Int, w: Int, h: Int))] = []
+    var canvases: [Int] = []
     var seen = 0
 
     func walk(_ element: AXUIElement, _ depth: Int) {
@@ -217,6 +260,30 @@ func collect(bundleId: String) throws -> Collected {
         let role = text(element, kAXRoleAttribute) ?? ""
         let subrole = text(element, kAXSubroleAttribute) ?? ""
         let elementActions = actions(element)
+        if documentRoles.contains(role), canvases.count < maxCanvases, nodes.count < 400,
+           children(element).isEmpty, (text(element, kAXValueAttribute) ?? "").isEmpty,
+           let f = frame(element), let wf = windowFrame, intersects(f, wf) {
+            // The visible part of the page is what is read and where the caret goes.
+            let visible = (x: max(f.x, wf.x), y: max(f.y, wf.y),
+                           w: min(f.x + f.w, wf.x + wf.w) - max(f.x, wf.x),
+                           h: min(f.y + f.h, wf.y + wf.h) - max(f.y, wf.y))
+            canvases.append(nodes.count)
+            nodes.append(
+                Node(
+                    element: element,
+                    index: nodes.count,
+                    role: role,
+                    subrole: subrole,
+                    name: accessibleName(element),
+                    value: "",
+                    identifier: text(element, kAXIdentifierAttribute) ?? "",
+                    enabled: true,
+                    actions: [typeTextAction],
+                    frame: visible
+                )
+            )
+            return
+        }
         if isInteractive(role, subrole, elementActions) {
             let enabled = (attribute(element, kAXEnabledAttribute) as? Bool) ?? true
             // Only document-like text joins the window text; a combo box's value ("12")
@@ -257,7 +324,7 @@ func collect(bundleId: String) throws -> Collected {
     let unnamed = nodes.indices.filter { nodes[$0].name.isEmpty && nodes[$0].value.isEmpty && nodes[$0].frame != nil }
     var ocr: String? = nil
     var recognisedLeftover: [RecognisedLine] = []
-    if !shells.isEmpty || !unnamed.isEmpty, let wf = windowFrame {
+    if !shells.isEmpty || !unnamed.isEmpty || !canvases.isEmpty, let wf = windowFrame {
         if !CGPreflightScreenCaptureAccess() {
             ocr = "screen_recording_denied"
         } else {
@@ -275,9 +342,19 @@ func collect(bundleId: String) throws -> Collected {
                     .map { lines[$0].text }
                     .joined(separator: " · ")
             }
-            for i in unnamed {
+            for i in unnamed where !canvases.contains(i) {
                 let name = textInside(nodes[i].frame!)
                 if !name.isEmpty { nodes[i] = nodes[i].renamed(String(name.prefix(120))) }
+            }
+            // For a document the page *is* the state: what the recogniser reads on
+            // the canvas is its value and joins the window text, as an editor's
+            // AXValue does.
+            for i in canvases {
+                let content = textInside(nodes[i].frame!).replacingOccurrences(of: " · ", with: "\n")
+                if !content.isEmpty {
+                    nodes[i] = nodes[i].revalued(String(content.prefix(2000)))
+                    texts.append(String(content.prefix(2000)))
+                }
             }
             for shell in shells {
                 let inside = textInside(shell.frame)
@@ -587,6 +664,19 @@ func handle(_ request: [String: Any]) {
                   let value = request["value"] as? String
             else { throw HelperError("setvalue needs bundleId, signature, index and value") }
             let node = try resolve(bundleId: id, signature: signature, index: index)
+            if node.actions.contains(typeTextAction) {
+                // A drawn document: place the caret with a click near the top of the
+                // visible page, then type. The text goes in at the caret, after
+                // whatever is there; nothing is selected or replaced.
+                guard let f = node.frame else { throw HelperError("node \(index) has no frame") }
+                guard let app = application(bundleId: id) else { throw HelperError("application disappeared") }
+                if !app.isActive { app.activate(); usleep(300_000) }
+                mouseClick(x: f.x + f.w / 2, y: f.y + min(f.h, 240) / 2)
+                usleep(250_000)
+                typeUnicode(pid: app.processIdentifier, value)
+                respond(["ok": true])
+                break
+            }
             // A field that can confirm (a browser address bar, a search field) is
             // submitted, because a value left unconfirmed there does nothing. It is
             // focused first: Safari repopulates its address bar with the page URL

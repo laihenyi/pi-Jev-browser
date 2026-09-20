@@ -14,8 +14,9 @@
   `jev_extract`、`jev_state`、`jev_logs`、`jev_stream` 與 `jev_stop` 驅動一個
   隔離的 Playwright Chromium。
 - **第八個 `jev_desktop` 透過輔助使用樹（accessibility tree）驅動一個 macOS
-  應用程式**，用的是同一個迴圈與同一組守衛，而且預設關閉：應用程式必須先列在
-  `desktop.allowedBundleIds` 裡才能被驅動，每次執行都先詢問使用者。決策迴圈不知道
+  應用程式**，用的是同一個迴圈與同一組守衛。和 computer use 一樣，任何已安裝的
+  應用程式都能驅動，每次執行都先詢問使用者；參數接受顯示名稱，`findApp` 會列出
+  已安裝的應用程式，呼叫端不必先知道另一台機器的 bundle id。決策迴圈不知道
   自己在驅動哪一種表面：`src/loop.ts` 只依賴 `Driver` 介面，不 import Playwright。
   瀏覽器驅動是 `src/observe.ts`；桌面驅動是 `src/drivers/desktop.ts` 加上一個常駐的
   Swift helper，`desktop` benchmark 層在真實的計算機與 TextEdit 視窗上量測它。
@@ -269,7 +270,7 @@ TextEdit，由從應用程式讀回文件驗證。
 - 涵蓋 prompt injection、敏感資料與有後果動作的 prompt 指引
 
 瀏覽器在隔離狀態下啟動，瀏覽器工具沒有任何東西碰宿主桌面。唯一會碰的
-`jev_desktop` 預設關閉，由允許清單與確認把關；見[桌面工具](#桌面工具)。
+`jev_desktop` 每次執行前都會先詢問使用者；見[桌面工具](#桌面工具)。
 
 ## 工具
 
@@ -286,22 +287,33 @@ TextEdit，由從應用程式讀回文件驗證。
 
 ### 桌面工具
 
-`jev_desktop` 接受一個 bundle id 與一個目標，跑的是 `jev_run` 跑的同一個迴圈，
-只是對象是應用程式的輔助使用樹而不是頁面。Jev 看到視窗的文字與控制項
+`jev_desktop` 接受一個 bundle id（或用應用程式顯示名稱，例如 `Microsoft Word`）與一個目標，
+跑的是 `jev_run` 跑的同一個迴圈，只是對象是應用程式的輔助使用樹而不是頁面。Jev 看到視窗的文字與控制項
 （角色、名稱、值，以及跨語言穩定的輔助使用識別碼），從來不是像素。動作是元素
 上的輔助使用動作，所以視窗有沒有焦點都能落地，有人在執行途中切換視窗不會改變
 迴圈操作的對象。動作前，迴圈從第一次觀察規劃步驟（用 `plan: false` 關閉）；計畫
 隨結果回傳並寫入 trace。
 
-三件事成立前它拒絕執行，並說出缺的是哪一件：
+沒有應用程式允許清單：和 computer use 一樣，工具可以驅動任何已安裝的應用程式。
+也不需要事先知道 bundle id：參數接受顯示名稱，`findApp` 會定位應用程式
+（名稱、bundle id、路徑）而不驅動任何東西。優先搜尋應用程式資料夾，並往下走幾層，
+所以廠商自己的子資料夾（`/Applications/Epson Software/…`）也算在內；資料夾裡
+找不到才擴大到 Spotlight，找出安裝在磁碟任何位置的應用程式。結果會說明是哪一種
+方式找到的。
 
-- **應用程式在允許清單裡。** 設定檔裡的 `desktop.allowedBundleIds` 預設為空，
-  所以使用者列出之前什麼都不能驅動（精確 id 或 `com.apple.*` 這樣的樣式）。
-  工具告訴代理要加什麼，指引禁止代理自己編輯那個檔案。
+兩件事成立前它拒絕執行，並說出缺的是哪一件：
+
 - **使用者確認了這次執行。** 除非 `desktop.requireConfirmation` 為 `false`，
-  每次呼叫都會詢問，並指名應用程式與目標。
+  每次呼叫都會詢問，並指名應用程式與目標。設定檔仍然是使用者的，指引禁止代理
+  自己關掉這個詢問，或繞過它。
 - **宿主做得到。** macOS、用 `npm run build:ax-helper` 建好的 helper，以及執行
   pi 的 process 的輔助使用權限。缺少前置需求以設定訊息回報，不是失敗的執行。
+
+自己繪製文件的應用程式（Word 的頁面是一個沒有值、沒有動作、沒有子節點的
+`AXLayoutArea`）也能驅動：helper 把頁面當成文字目標，用文字辨識讀出頁面上的
+內容，並在點擊放好游標後以鍵盤事件輸入。目標裡自成一行的段落會整段作為候選，
+所以一則故事一步就打完，不是一句一句拆開。冷啟動後，執行會先等到第一個視窗
+出現才觀察。
 
 結果帶著執行狀態、計畫、已執行的步驟、`<outputDir>/desktop/` 下的
 `tracePath`，以及視窗的最終文字，讓代理能拿應用程式顯示的內容驗證
@@ -310,7 +322,7 @@ TextEdit，由從應用程式讀回文件驗證。
 回報為 `window_unavailable`。
 
 ```json
-{ "desktop": { "allowedBundleIds": ["com.apple.calculator", "com.apple.TextEdit"], "requireConfirmation": true } }
+{ "desktop": { "requireConfirmation": true } }
 ```
 
 ### 用元素目標取代座標
@@ -390,7 +402,7 @@ viewport、WebM 錄影開啟、游標與點擊指示開啟、即時檢視器在 
   "profile": "session",
   "typesafe": { "apiKey": "", "baseUrl": "https://api.typesafe.ai", "model": "jev-latest" },
   "textHelper": { "model": "" },
-  "desktop": { "allowedBundleIds": [], "requireConfirmation": true }
+  "desktop": { "requireConfirmation": true }
 }
 ```
 
@@ -431,10 +443,10 @@ viewport、WebM 錄影開啟、游標與點擊指示開啟、即時檢視器在 
 瀏覽器在隔離狀態下啟動。Jev 的動作迴圈用 DOM 觀察；代理收到截圖來獨立驗證
 結果。
 
-`jev_desktop` 操作的是使用者自己的應用程式，所以在使用者把應用程式列入
-`desktop.allowedBundleIds` 並確認每次執行之前都是關閉的。對任何存有真實資料的
-應用程式保持這個確認開啟；迴圈會在有後果的動作前交回控制權，但允許清單說的是
-哪個應用程式可以被驅動，不是它裡面的每個目標都可以接受。
+`jev_desktop` 操作的是使用者自己的應用程式，而且任何一個都碰得到，所以每次執行
+前都會詢問。對任何存有真實資料的應用程式保持這個確認開啟；迴圈會在有後果的動作
+前交回控制權，但確認一次執行說的是這個應用程式裡的這個目標可以，不是它裡面的
+每個目標都可以接受。
 
 ## 開發
 

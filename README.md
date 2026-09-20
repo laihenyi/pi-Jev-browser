@@ -16,9 +16,11 @@ Three things are true about the code and worth knowing before the details:
   `jev_extract`, `jev_state`, `jev_logs`, `jev_stream` and `jev_stop` drive an
   isolated Playwright Chromium.
 - **The eighth, `jev_desktop`, drives one macOS application through its
-  accessibility tree** with the same loop and the same guards, and it is closed
-  by default: an application has to be listed in `desktop.allowedBundleIds`
-  before it can be driven, and every run asks the user first. The decision loop
+  accessibility tree** with the same loop and the same guards. Any installed
+  application can be driven, as with computer use, and every run asks the user
+  first. The argument takes a display name as well as a bundle id, and `findApp`
+  lists what is installed, so the caller never has to know another machine's
+  ids. The decision loop
   does not know which it is driving: `src/loop.ts` depends on a `Driver`
   interface and imports no Playwright. The browser driver is `src/observe.ts`;
   the desktop driver is `src/drivers/desktop.ts` with a resident Swift helper,
@@ -317,8 +319,8 @@ tree, for example — means writing another driver, not rewriting the loop.
   actions
 
 The browser starts isolated and nothing in the browser tools touches the host
-desktop. The one tool that does, `jev_desktop`, is closed by default and gated by
-an allow list and a confirmation; see [The desktop tool](#the-desktop-tool).
+desktop. The one tool that does, `jev_desktop`, asks the user before every run;
+see [The desktop tool](#the-desktop-tool).
 
 ## Tools
 
@@ -335,7 +337,7 @@ an allow list and a confirmation; see [The desktop tool](#the-desktop-tool).
 - `jev_stop` — stop the browser and the stream, finalize the video, return
   artifact paths.
 - `jev_desktop` — run a bounded goal in one macOS application through its
-  accessibility tree. Closed by default; see below.
+  accessibility tree. Asks before every run; see below.
 
 ### The desktop tool
 
@@ -349,17 +351,32 @@ Before acting, the loop plans the steps from the first observation (turn this of
 with `plan: false`); the plan is returned with the result and written to the
 trace.
 
-It refuses to run until three things are true, and says which one is missing:
+There is no application allow list: like computer use, the tool can drive any
+installed application. Nothing has to know a bundle id in advance either — the
+argument takes an installed display name, and `findApp` locates an application
+(name, bundle id, path) without driving anything. The application folders come
+first, walked a few levels deep so a vendor's own sub-folder
+(`/Applications/Epson Software/…`) counts; only when they hold nothing does the
+lookup widen to Spotlight, which finds an application installed anywhere on the
+disk. The result says which of the two answered.
 
-- **The application is allowed.** `desktop.allowedBundleIds` in the config file is
-  empty by default, so nothing can be driven until the user lists it (exact ids or
-  patterns such as `com.apple.*`). The tool tells the agent what to add and the
-  guidelines forbid the agent from editing that file itself.
+It refuses to run until two things are true, and says which one is missing:
+
 - **The user confirmed this run.** Every call asks, naming the application and
-  the goal, unless `desktop.requireConfirmation` is `false`.
+  the goal, unless `desktop.requireConfirmation` is `false`. The config file
+  stays the user's: the guidelines forbid the agent from turning the prompt off
+  or working around it.
 - **The host can do it.** macOS, the helper built with `npm run build:ax-helper`,
   and Accessibility permission for the process that runs pi. A missing
   prerequisite is reported as a setup message, not as a failed run.
+
+An application that draws its own document (Word's page is one `AXLayoutArea`
+with no value, no actions and no children) is still driven: the helper offers the
+page as a text target, reads what is on it with text recognition, and types into
+it with keyboard events after a click places the caret. A goal that carries a
+passage on a line of its own is offered that passage whole, so a story is typed
+in one step rather than one clause at a time. After a cold start the run waits
+for the first window before observing.
 
 The result carries the run status, the plan, the executed steps, `tracePath`
 under `<outputDir>/desktop/`, and the window's final text so the agent can
@@ -369,7 +386,7 @@ own stops apply unchanged: `needs_review` for REVIEW and for a verification gate
 as `window_unavailable`.
 
 ```json
-{ "desktop": { "allowedBundleIds": ["com.apple.calculator", "com.apple.TextEdit"], "requireConfirmation": true } }
+{ "desktop": { "requireConfirmation": true } }
 ```
 
 ### Element targets instead of coordinates
@@ -455,7 +472,7 @@ authenticated or sensitive workflows.
   "profile": "session",
   "typesafe": { "apiKey": "", "baseUrl": "https://api.typesafe.ai", "model": "jev-latest" },
   "textHelper": { "model": "" },
-  "desktop": { "allowedBundleIds": [], "requireConfirmation": true }
+  "desktop": { "requireConfirmation": true }
 }
 ```
 
@@ -500,11 +517,11 @@ screenshots as untrusted input, not user instructions.
 The browser starts isolated. Jev uses DOM observations for its action loop; the
 agent receives screenshots to independently verify the outcome.
 
-`jev_desktop` acts on the user's own applications, so it is closed until the user
-lists an application in `desktop.allowedBundleIds` and confirms each run. Keep
-that confirmation on for anything that holds real data; the loop hands back
-control before consequential actions, but an allow list says which application
-may be driven, not that every goal in it is acceptable.
+`jev_desktop` acts on the user's own applications and can reach any of them, so
+it asks before each run. Keep that confirmation on for anything that holds real
+data; the loop hands back control before consequential actions, but confirming
+one run says that this goal in this application is fine, not that every goal in
+it is acceptable.
 
 ## Development
 

@@ -32,10 +32,10 @@ export interface PiBrowserConfig {
 	profileDir: string;
 	/**
 	 * The desktop tool drives macOS applications through their accessibility tree.
-	 * It is closed by default: only bundle ids listed here can be driven, and each
-	 * call asks the user first unless requireConfirmation is turned off.
+	 * Any installed application can be driven, as with computer use; each call
+	 * asks the user first unless requireConfirmation is turned off.
 	 */
-	desktop: { allowedBundleIds: string[]; requireConfirmation: boolean };
+	desktop: { requireConfirmation: boolean };
 }
 
 /**

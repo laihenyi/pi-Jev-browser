@@ -79,6 +79,24 @@ test("the accessibility tree becomes addressable targets", async () => {
 	}
 });
 
+test("a drawn document canvas is a text target whose value is what was read off it", async () => {
+	const canvas = { index: 5, role: "AXLayoutArea", name: "文件1", value: "從前有個小女孩", identifier: "", enabled: true, actions: ["TypeText"] };
+	const { driver, log } = driverWith({ FAKE_AX_NODES: JSON.stringify([...NODES, canvas]) });
+	try {
+		const snapshot = await driver.observe();
+		const page = snapshot.data.targets.find((target) => target.label === "文件1");
+		assert.ok(page, "the canvas is offered");
+		assert.equal(page.operation, "TYPE_TEXT");
+		assert.equal(page.value, "從前有個小女孩");
+		await snapshot.execute("TYPE_TEXT", page, "大野狼", AbortSignal.timeout(5000));
+		const set = calls(log).find((call) => call.cmd === "setvalue");
+		assert.equal(set?.index, 5);
+		assert.equal(set?.value, "大野狼");
+	} finally {
+		await driver.close();
+	}
+});
+
 test("clicking a target is an accessibility action carrying the observed signature", async () => {
 	const { driver, log } = driverWith({});
 	try {
@@ -104,6 +122,35 @@ test("typing goes through setvalue and needs no coordinates", async () => {
 		assert.equal(set.value, "zebra");
 		assert.equal(set.index, 2);
 	} finally {
+		await driver.close();
+	}
+});
+
+test("a press whose control vanished because it worked is a success when the window moved on", async () => {
+	const { driver, log } = driverWith({ FAKE_AX_PRESS_ERROR: "press failed: AXError -25205", FAKE_AX_NEXT_SIGNATURE: "sig-2" });
+	try {
+		const snapshot = await driver.observe();
+		await snapshot.execute("CLICK", snapshot.data.targets[0], undefined, AbortSignal.timeout(5000));
+		// The driver checked the window after the error rather than trusting it.
+		assert.deepEqual(calls(log).map((call) => call.cmd).slice(-2), ["press", "observe"]);
+	} finally {
+		delete process.env.FAKE_AX_PRESS_ERROR;
+		delete process.env.FAKE_AX_NEXT_SIGNATURE;
+		await driver.close();
+	}
+});
+
+test("a press error on an unchanged window is still a failure", async () => {
+	const { driver } = driverWith({ FAKE_AX_PRESS_ERROR: "press failed: AXError -25205" });
+	delete process.env.FAKE_AX_NEXT_SIGNATURE;
+	try {
+		const snapshot = await driver.observe();
+		await assert.rejects(
+			snapshot.execute("CLICK", snapshot.data.targets[0], undefined, AbortSignal.timeout(5000)),
+			/-25205/,
+		);
+	} finally {
+		delete process.env.FAKE_AX_PRESS_ERROR;
 		await driver.close();
 	}
 });

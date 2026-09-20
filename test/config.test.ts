@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { isBundleIdAllowed, isUrlAllowed, readConfig } from "../src/config.ts";
+import { isUrlAllowed, readConfig } from "../src/config.ts";
 
 test("matches configured origins and blocks unsupported schemes", () => {
 	const patterns = ["https://*.example.com", "http://localhost:*"];
@@ -75,26 +75,20 @@ test("reports unreadable or malformed configuration instead of silently defaulti
 	}
 });
 
-test("the desktop tool is closed by default and opens only to listed bundle ids", () => {
-	const closed = readConfig(join(tmpdir(), "missing-pi-jev-browser.config.json"));
-	assert.deepEqual(closed.desktop, { allowedBundleIds: [], requireConfirmation: true });
-	assert.equal(isBundleIdAllowed("com.apple.calculator", closed.desktop.allowedBundleIds), false);
+test("the desktop tool asks before every run by default and has no allow list", () => {
+	const defaults = readConfig(join(tmpdir(), "missing-pi-jev-browser.config.json"));
+	assert.deepEqual(defaults.desktop, { requireConfirmation: true });
 
 	const directory = mkdtempSync(join(tmpdir(), "pi-jev-browser-config-"));
 	const path = join(directory, "config.json");
 	try {
+		// A leftover allowedBundleIds from an older config is ignored, not enforced.
 		writeFileSync(
 			path,
-			JSON.stringify({ desktop: { allowedBundleIds: ["com.apple.calculator", " com.example.* "], requireConfirmation: false } }),
+			JSON.stringify({ desktop: { allowedBundleIds: ["com.apple.calculator"], requireConfirmation: false } }),
 		);
 		const config = readConfig(path);
-		assert.deepEqual(config.desktop, {
-			allowedBundleIds: ["com.apple.calculator", "com.example.*"],
-			requireConfirmation: false,
-		});
-		assert.equal(isBundleIdAllowed("com.apple.calculator", config.desktop.allowedBundleIds), true);
-		assert.equal(isBundleIdAllowed("com.example.notes", config.desktop.allowedBundleIds), true);
-		assert.equal(isBundleIdAllowed("com.apple.TextEdit", config.desktop.allowedBundleIds), false);
+		assert.deepEqual(config.desktop, { requireConfirmation: false });
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}

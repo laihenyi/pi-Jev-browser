@@ -5,7 +5,6 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
-import { isBundleIdAllowed } from "./config.ts";
 import {
 	defaultHelperPath,
 	desktopDriver,
@@ -23,9 +22,9 @@ import type { PiBrowserConfig, ToolHost } from "./types.ts";
  *
  * Everything that makes this safe to expose as a tool lives here rather than in
  * the driver: the platform and helper checks that turn a missing prerequisite into
- * a setup message, the Accessibility-permission check, and the bundle-id allow
- * list, which is empty by default so nothing can be driven until the user names
- * it. Confirmation is the extension's job, because it needs the UI.
+ * a setup message and the Accessibility-permission check. Any installed
+ * application can be driven, as with computer use; confirmation is the
+ * extension's job, because it needs the UI.
  */
 
 const execFileAsync = promisify(execFile);
@@ -65,18 +64,36 @@ export function assertDesktopPrerequisites(
 		throw configurationError(
 			`"${input.bundleId}" is not a bundle id. Use the reverse-DNS form, for example com.apple.calculator.`,
 		);
-	if (!isBundleIdAllowed(input.bundleId, config.desktop.allowedBundleIds))
-		throw configurationError(
-			config.desktop.allowedBundleIds.length === 0
-				? `jev_desktop is closed by default. Add the application's bundle id to desktop.allowedBundleIds in pi-jev-browser.config.json (for example ["com.apple.calculator"]) to allow it.`
-				: `${input.bundleId} is not in desktop.allowedBundleIds (${config.desktop.allowedBundleIds.join(", ")}). Add it to pi-jev-browser.config.json to allow it.`,
-		);
 	return helperPath;
 }
 
 async function isRunning(driver: DesktopDriver, bundleId: string) {
 	const response = await driver.call({ cmd: "instance", bundleId });
 	return response.ok === true;
+}
+
+/**
+ * A process exists well before its first window does: Word, for one, spends
+ * seconds between launch and its template gallery. After a cold start the run
+ * waits for a window, so the first observation is of the application and not of
+ * the gap. An application that was already running is not waited for: no window
+ * there is a real state the loop reports as window_unavailable.
+ */
+export async function waitForWindow(
+	driver: Pick<DesktopDriver, "call">,
+	bundleId: string,
+	deadlineMs = 30_000,
+	intervalMs = 250,
+): Promise<boolean> {
+	const deadline = Date.now() + deadlineMs;
+	for (;;) {
+		const response = await driver.call({ cmd: "observe", bundleId });
+		if (response.ok === true) return true;
+		if (!/no window|not responding|still launching/i.test(String(response.error)))
+			return false;
+		if (Date.now() >= deadline) return false;
+		await sleep(intervalMs);
+	}
 }
 
 export async function runDesktop(
@@ -109,6 +126,10 @@ export async function runDesktop(
 				await sleep(250);
 			if (!(await isRunning(driver, input.bundleId)))
 				throw configurationError(`${input.bundleId} did not start within 30 seconds.`);
+			if (!(await waitForWindow(driver, input.bundleId)))
+				throw configurationError(
+					`${input.bundleId} started but showed no window within 30 seconds. Open a window in it, then try again.`,
+				);
 		}
 		if (input.activate !== false) await driver.activate();
 		host.onEvent?.("desktop-start", { bundleId: input.bundleId });
