@@ -35,6 +35,7 @@
     "benchmarks/scenarios/",
     "test/",
     "pi-jev-browser.config.example.json",
+    "docs/",
     "README.md",
     "README.zh-TW.md",
     "LICENSE",
