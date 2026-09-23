@@ -239,6 +239,8 @@ func intersects(_ a: (x: Int, y: Int, w: Int, h: Int), _ b: (x: Int, y: Int, w: 
 /// unbounded observation. `observe` serialises the result and `resolve` picks an
 /// element out of a fresh one, so both always see the same node order.
 func collect(bundleId: String) throws -> Collected {
+    lastTiming = [:]
+    let walkStart = DispatchTime.now()
     guard let app = application(bundleId: bundleId) else {
         throw HelperError("no running application with bundle id \(bundleId)")
     }
@@ -318,6 +320,7 @@ func collect(bundleId: String) throws -> Collected {
     }
 
     walk(window, 0)
+    lastTiming["walk"] = milliseconds(since: walkStart)
 
     // Unnamed controls with a frame (a composer whose placeholder is only drawn,
     // an icon button) are named from the same capture, so the screen is read once.
@@ -402,7 +405,9 @@ func collect(bundleId: String) throws -> Collected {
 
 struct RecognisedLine {
     let text: String
-    let centre: (x: Int, y: Int)
+    /// Screen points, top-left origin.
+    let box: (x: Int, y: Int, w: Int, h: Int)
+    var centre: (x: Int, y: Int) { (box.x + box.w / 2, box.y + box.h / 2) }
 }
 
 /// The window server's id for the application window at `frame`, so the capture
@@ -426,20 +431,187 @@ func windowNumber(pid: pid_t, frame: (x: Int, y: Int, w: Int, h: Int)) -> CGWind
     return nil
 }
 
+// MARK: - text recognition, reading only what changed
+
+// Recognition costs most of an observation and charges by the amount of text,
+// so the saving is in reading less: the capture is compared with the previous
+// one at 1/8 scale in tiles, unchanged tiles keep the lines they produced last
+// time, and only the rectangles around the changed tiles are read again. A
+// window that has not moved a pixel costs one capture and no recognition.
+let thumbDivisor = 8          // one thumbnail pixel per 8 points
+let tilePoints = 128          // tile side in points
+let tileDifference = 6.0      // mean absolute 8-bit difference that counts a tile as changed
+let reocrFraction = 0.6       // above this share of changed tiles, reading everything is cheaper
+let maxReocrRects = 4
+
+final class OcrCache {
+    var window: CGWindowID? = nil
+    var frame: (x: Int, y: Int, w: Int, h: Int)? = nil
+    var thumb: [UInt8] = []
+    var thumbSize: (w: Int, h: Int) = (0, 0)
+    var lines: [RecognisedLine] = []
+
+    func reusable(window: CGWindowID?, frame: (x: Int, y: Int, w: Int, h: Int), thumbSize: (w: Int, h: Int)) -> Bool {
+        guard let f = self.frame else { return false }
+        return self.window == window && f == frame && self.thumbSize == thumbSize && !thumb.isEmpty
+    }
+}
+
+let ocrCache = OcrCache()
+
+/// What the last observation cost, phase by phase, in milliseconds.
+var lastTiming: [String: Any] = [:]
+
+func milliseconds(since start: DispatchTime) -> Int {
+    Int((DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000)
+}
+
 /// Captures one window (or, failing that, its screen rectangle in points,
-/// top-left origin) and recognises the text in it. Accurate mode is required:
-/// the fast recogniser has no CJK support.
-func recogniseText(window: CGWindowID?, in rect: (x: Int, y: Int, w: Int, h: Int)) -> [RecognisedLine] {
+/// top-left origin). macOS 26 has no CGWindowListCreateImage, so the system
+/// tool does the capture.
+func captureWindow(window: CGWindowID?, in rect: (x: Int, y: Int, w: Int, h: Int)) -> CGImage? {
     let path = NSTemporaryDirectory() + "ax-helper-ocr-\(getpid()).png"
     defer { try? FileManager.default.removeItem(atPath: path) }
     let capture = Process()
     capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
     capture.arguments = window.map { ["-x", "-o", "-l", "\($0)", path] }
         ?? ["-x", "-R", "\(rect.x),\(rect.y),\(rect.w),\(rect.h)", path]
-    do { try capture.run() } catch { return [] }
+    do { try capture.run() } catch { return nil }
     capture.waitUntilExit()
-    guard let image = NSImage(contentsOfFile: path)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
-    else { return [] }
+    return NSImage(contentsOfFile: path)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+}
+
+/// A grayscale copy at one pixel per `thumbDivisor` points, box-averaged by the
+/// scaler, so compression noise does not read as a change.
+func thumbnail(of image: CGImage, rect: (x: Int, y: Int, w: Int, h: Int)) -> ([UInt8], (w: Int, h: Int)) {
+    let w = max(1, rect.w / thumbDivisor), h = max(1, rect.h / thumbDivisor)
+    var pixels = [UInt8](repeating: 0, count: w * h)
+    let ok = pixels.withUnsafeMutableBytes { buffer -> Bool in
+        guard let context = CGContext(
+            data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ) else { return false }
+        context.interpolationQuality = .medium
+        context.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return true
+    }
+    if !ok { return ([], (w: 0, h: 0)) }
+    return (pixels, (w: w, h: h))
+}
+
+/// Tiles of the window (in points, relative to the window origin) whose
+/// thumbnail patch moved.
+func changedTiles(_ now: [UInt8], _ before: [UInt8], size: (w: Int, h: Int), rect: (x: Int, y: Int, w: Int, h: Int)) -> (changed: [(x: Int, y: Int, w: Int, h: Int)], total: Int) {
+    var changed: [(x: Int, y: Int, w: Int, h: Int)] = []
+    var total = 0
+    let step = tilePoints / thumbDivisor
+    var ty = 0
+    while ty < size.h {
+        var tx = 0
+        while tx < size.w {
+            total += 1
+            let x2 = min(tx + step, size.w), y2 = min(ty + step, size.h)
+            var sum = 0
+            var count = 0
+            for y in ty..<y2 {
+                for x in tx..<x2 {
+                    sum += abs(Int(now[y * size.w + x]) - Int(before[y * size.w + x]))
+                    count += 1
+                }
+            }
+            if count > 0, Double(sum) / Double(count) > tileDifference {
+                changed.append((tx * thumbDivisor, ty * thumbDivisor,
+                                (x2 - tx) * thumbDivisor, (y2 - ty) * thumbDivisor))
+            }
+            tx += step
+        }
+        ty += step
+    }
+    return (changed, total)
+}
+
+func union(_ a: (x: Int, y: Int, w: Int, h: Int), _ b: (x: Int, y: Int, w: Int, h: Int)) -> (x: Int, y: Int, w: Int, h: Int) {
+    let x = min(a.x, b.x), y = min(a.y, b.y)
+    return (x, y, max(a.x + a.w, b.x + b.w) - x, max(a.y + a.h, b.y + b.h) - y)
+}
+
+func touches(_ a: (x: Int, y: Int, w: Int, h: Int), _ b: (x: Int, y: Int, w: Int, h: Int)) -> Bool {
+    a.x <= b.x + b.w && b.x <= a.x + a.w && a.y <= b.y + b.h && b.y <= a.y + a.h
+}
+
+func clamp(_ r: (x: Int, y: Int, w: Int, h: Int), to bounds: (w: Int, h: Int)) -> (x: Int, y: Int, w: Int, h: Int) {
+    let x = max(0, r.x), y = max(0, r.y)
+    return (x, y, max(0, min(r.x + r.w, bounds.w) - x), max(0, min(r.y + r.h, bounds.h) - y))
+}
+
+/// The rectangles to read again (window-relative points): one per blob of
+/// touching changed tiles, padded by a tile, grown past any known line it would
+/// cut (a crop through a line returns the half it can see), merged when they
+/// meet, and brought down to `maxReocrRects` by merging the closest pairs.
+func reocrRects(_ changed: [(x: Int, y: Int, w: Int, h: Int)], lines: [RecognisedLine], bounds: (w: Int, h: Int)) -> [(x: Int, y: Int, w: Int, h: Int)] {
+    // A band the full width of the window: the recogniser segments a line by
+    // its horizontal context, so a crop that starts mid-line reads "上午 9:02"
+    // where the whole window read "上午9:02", and a row named from those lines
+    // would flap between two spellings on alternate reads.
+    var rects: [(x: Int, y: Int, w: Int, h: Int)] = changed.map {
+        clamp((0, $0.y - tilePoints, bounds.w, $0.h + 2 * tilePoints), to: bounds)
+    }
+    func settle() {
+        var moved = true
+        while moved {
+            moved = false
+            for i in rects.indices {
+                for line in lines where intersects(line.box, rects[i]) {
+                    let grown = clamp(union(rects[i], line.box), to: bounds)
+                    if grown != rects[i] { rects[i] = grown; moved = true }
+                }
+            }
+            var i = 0
+            while i < rects.count {
+                var j = i + 1
+                while j < rects.count {
+                    if touches(rects[i], rects[j]) {
+                        rects[i] = union(rects[i], rects[j])
+                        rects.remove(at: j)
+                        moved = true
+                    } else { j += 1 }
+                }
+                i += 1
+            }
+        }
+    }
+    settle()
+    while rects.count > maxReocrRects {
+        var best = (Int.max, 0, 1)
+        for i in rects.indices {
+            for j in rects.indices where j > i {
+                let dx = max(0, max(rects[i].x, rects[j].x) - min(rects[i].x + rects[i].w, rects[j].x + rects[j].w))
+                let dy = max(0, max(rects[i].y, rects[j].y) - min(rects[i].y + rects[i].h, rects[j].y + rects[j].h))
+                if dx * dx + dy * dy < best.0 { best = (dx * dx + dy * dy, i, j) }
+            }
+        }
+        rects[best.1] = union(rects[best.1], rects[best.2])
+        rects.remove(at: best.2)
+        settle()
+    }
+    return rects.filter { $0.w > 0 && $0.h > 0 }
+}
+
+/// Recognises the text in one window-relative rectangle of the capture. Accurate
+/// mode is required: the fast recogniser has no CJK support. Lines come back in
+/// screen points, so nothing downstream knows a crop happened.
+func recogniseLines(in image: CGImage, window rect: (x: Int, y: Int, w: Int, h: Int), crop: (x: Int, y: Int, w: Int, h: Int)) -> [RecognisedLine] {
+    let scale = Double(image.width) / Double(max(1, rect.w))
+    let whole = crop.x == 0 && crop.y == 0 && crop.w == rect.w && crop.h == rect.h
+    let source: CGImage
+    if whole {
+        source = image
+    } else {
+        guard let cut = image.cropping(to: CGRect(x: Double(crop.x) * scale, y: Double(crop.y) * scale,
+                                                  width: Double(crop.w) * scale, height: Double(crop.h) * scale))
+        else { return [] }
+        source = cut
+    }
     let request = VNRecognizeTextRequest()
     request.recognitionLevel = .accurate
     request.usesLanguageCorrection = true
@@ -450,14 +622,69 @@ func recogniseText(window: CGWindowID?, in rect: (x: Int, y: Int, w: Int, h: Int
     for language in ["zh-Hant", "en-US"] + Locale.preferredLanguages.prefix(3).map({ String($0) })
     where !languages.contains(language) { languages.append(language) }
     request.recognitionLanguages = languages
-    guard (try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])) != nil else { return [] }
+    guard (try? VNImageRequestHandler(cgImage: source, options: [:]).perform([request])) != nil else { return [] }
     return (request.results ?? []).compactMap { observation in
         guard let candidate = observation.topCandidates(1).first else { return nil }
+        // An icon, a badge or a cursor read as a character or two ("口", "-6", "Q")
+        // comes back with little confidence and flickers between reads; it would
+        // make every observation a new state. Real text clears the bar easily.
+        let short = candidate.string.trimmingCharacters(in: .whitespaces).count <= 2
+        if candidate.confidence < 0.3 || (short && candidate.confidence < 0.6) { return nil }
         let box = observation.boundingBox // normalised, origin bottom-left
-        let cx = rect.x + Int(box.midX * Double(rect.w))
-        let cy = rect.y + Int((1 - box.midY) * Double(rect.h))
-        return RecognisedLine(text: candidate.string, centre: (cx, cy))
+        let x = rect.x + crop.x + Int(box.minX * Double(crop.w))
+        let y = rect.y + crop.y + Int((1 - box.maxY) * Double(crop.h))
+        return RecognisedLine(text: candidate.string,
+                              box: (x, y, max(1, Int(box.width * Double(crop.w))), max(1, Int(box.height * Double(crop.h)))))
     }
+}
+
+/// The window's text, read from a fresh capture but recognised only where the
+/// capture differs from the previous one. Records the capture and recognition
+/// cost and the share of the window read in `lastTiming`.
+func recogniseText(window: CGWindowID?, in rect: (x: Int, y: Int, w: Int, h: Int)) -> [RecognisedLine] {
+    let captureStart = DispatchTime.now()
+    guard let image = captureWindow(window: window, in: rect) else {
+        lastTiming["capture"] = milliseconds(since: captureStart)
+        return []
+    }
+    lastTiming["capture"] = milliseconds(since: captureStart)
+    let ocrStart = DispatchTime.now()
+    defer { lastTiming["ocr"] = milliseconds(since: ocrStart) }
+    let (thumb, size) = thumbnail(of: image, rect: rect)
+    let bounds = (w: rect.w, h: rect.h)
+    func readAll() -> [RecognisedLine] {
+        let lines = recogniseLines(in: image, window: rect, crop: (0, 0, rect.w, rect.h))
+        lastTiming["ocrRead"] = 100
+        return lines
+    }
+    func store(_ lines: [RecognisedLine]) -> [RecognisedLine] {
+        ocrCache.window = window
+        ocrCache.frame = rect
+        ocrCache.thumb = thumb
+        ocrCache.thumbSize = size
+        ocrCache.lines = lines
+        return lines
+    }
+    guard !thumb.isEmpty, ocrCache.reusable(window: window, frame: rect, thumbSize: size) else {
+        return store(readAll())
+    }
+    let (changed, total) = changedTiles(thumb, ocrCache.thumb, size: size, rect: rect)
+    if changed.isEmpty {
+        lastTiming["ocrRead"] = 0
+        ocrCache.thumb = thumb
+        return ocrCache.lines
+    }
+    if Double(changed.count) > reocrFraction * Double(max(1, total)) { return store(readAll()) }
+    // Lines are kept in screen points; the tiles are window-relative.
+    let relative = ocrCache.lines.map { RecognisedLine(text: $0.text, box: ($0.box.x - rect.x, $0.box.y - rect.y, $0.box.w, $0.box.h)) }
+    let rects = reocrRects(changed, lines: relative, bounds: bounds)
+    let area = rects.reduce(0) { $0 + $1.w * $1.h }
+    if area > Int(reocrFraction * Double(rect.w * rect.h)) { return store(readAll()) }
+    lastTiming["ocrRead"] = area * 100 / max(1, rect.w * rect.h)
+    lastTiming["ocrRects"] = rects.count
+    let kept = ocrCache.lines.indices.filter { i in !rects.contains { intersects(relative[i].box, $0) } }.map { ocrCache.lines[$0] }
+    let fresh = rects.flatMap { recogniseLines(in: image, window: rect, crop: $0) }
+    return store(kept + fresh)
 }
 
 func signatureOf(_ nodes: [Node]) -> String {
@@ -509,6 +736,7 @@ func observe(bundleId: String) throws -> [String: Any] {
         },
     ]
     if let ocr = collected.ocr { result["ocr"] = ocr }
+    result["timing"] = lastTiming
     return result
 }
 
@@ -518,6 +746,33 @@ func observe(bundleId: String) throws -> [String: Any] {
 /// Clicks at a point and puts the pointer back where it was. Leaving it over the
 /// target would keep hover effects (highlights, icons that appear under the pointer)
 /// alive, and the next observation would read them as a change the click made.
+/// A mouse click lands on whatever the window server has at that point, which is
+/// the application only when its window is on the current Space and nothing
+/// covers the point. Accessibility actions do not need this; a synthetic click
+/// does, because a click on a window that is not there goes to another
+/// application's window. The application is brought forward first and given
+/// time to arrive; then the point is hit-tested and refused unless it belongs
+/// to the application. The refusal reads as "covered", which the driver treats
+/// as an observation to redo, never as a click to try elsewhere.
+func reachable(_ point: (x: Int, y: Int), pid: pid_t, app: NSRunningApplication) throws {
+    let systemWide = AXUIElementCreateSystemWide()
+    func owner() -> pid_t? {
+        var element: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &element) == .success,
+              let hit = element else { return nil }
+        var hitPid: pid_t = 0
+        return AXUIElementGetPid(hit, &hitPid) == .success ? hitPid : nil
+    }
+    if !app.isActive { app.activate() }
+    // Switching Spaces or unminimising takes longer than one event round trip.
+    for _ in 0..<8 {
+        if owner() == pid { return }
+        usleep(200_000)
+    }
+    let other = owner().flatMap { NSRunningApplication(processIdentifier: $0)?.localizedName } ?? "another application or nothing"
+    throw HelperError("target is covered: the point belongs to \(other), not to \(app.localizedName ?? "the application") (its window may be on another Space)")
+}
+
 func mouseClick(x: Int, y: Int) {
     let point = CGPoint(x: x, y: y)
     let before = CGEvent(source: nil)?.location
@@ -638,11 +893,10 @@ func handle(_ request: [String: Any]) {
             guard node.enabled else { throw HelperError("node \(index) is disabled") }
             if node.actions.contains(mouseClickAction) {
                 guard let f = node.frame else { throw HelperError("node \(index) has no frame") }
-                if let app = application(bundleId: id), !app.isActive {
-                    app.activate()
-                    usleep(300_000)
-                }
-                mouseClick(x: f.x + f.w / 2, y: f.y + f.h / 2)
+                guard let app = application(bundleId: id) else { throw HelperError("no running application with bundle id \(id)") }
+                let point = (x: f.x + f.w / 2, y: f.y + f.h / 2)
+                try reachable(point, pid: app.processIdentifier, app: app)
+                mouseClick(x: point.x, y: point.y)
                 respond(["ok": true])
                 break
             }

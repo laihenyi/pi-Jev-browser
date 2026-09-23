@@ -59,6 +59,19 @@ interface RawNode {
 }
 
 const SETTLE_INTERVAL_MS = 300;
+
+/**
+ * Two helper reads compare as content, not as bytes: the helper serialises its
+ * dictionaries in no fixed order, and its timing figures differ on every read.
+ */
+const canonical = (value: unknown): string =>
+	JSON.stringify(value, (key, entry) =>
+		key === "timing"
+			? undefined
+			: entry && typeof entry === "object" && !Array.isArray(entry)
+				? Object.fromEntries(Object.keys(entry as object).sort().map((k) => [k, (entry as Record<string, unknown>)[k]]))
+				: entry,
+	);
 const SETTLE_BUDGET_MS = 2_500;
 
 // AXLayoutArea is a document the application draws itself (Word's page): the
@@ -151,7 +164,7 @@ export function desktopDriver(options: DesktopDriverOptions): DesktopDriver {
 	/** A helper refusal that means "the surface moved" is not a failure, it is a re-observe. */
 	const translate = (error: unknown): Error => {
 		const message = error instanceof Error ? error.message : String(error);
-		if (/surface changed|vanished|no node at index|disappeared/i.test(message))
+		if (/surface changed|vanished|no node at index|disappeared|covered/i.test(message))
 			return new StaleObservationError(message);
 		return error instanceof Error ? error : new Error(message);
 	};
@@ -340,7 +353,7 @@ export function desktopDriver(options: DesktopDriverOptions): DesktopDriver {
 			while (Date.now() < deadline) {
 				await sleep(SETTLE_INTERVAL_MS);
 				const again = await rawObserve();
-				if (JSON.stringify(again) === JSON.stringify(raw)) break;
+				if (canonical(again) === canonical(raw)) break;
 				raw = again;
 			}
 			return snapshotFrom(raw);

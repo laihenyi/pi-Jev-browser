@@ -1,6 +1,12 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Usage as ModelUsage } from "@earendil-works/pi-ai";
-import { type Driver, type Observation, type ObservedTarget, StaleObservationError } from "./driver.ts";
+import {
+	type Driver,
+	type Observation,
+	type ObservationSnapshot,
+	type ObservedTarget,
+	StaleObservationError,
+} from "./driver.ts";
 import { failureCategory, describeError } from "./errors.ts";
 import { verificationGate } from "./gate.ts";
 import { type JevPolicy, plannedGoal } from "./policy.ts";
@@ -193,8 +199,11 @@ export async function runJev(
 	/** Consecutive non-scroll actions that changed neither the surface nor the question. */
 	let fruitless = 0;
 	const inert = new Set<string>();
+	// Labels read off pixels differ by a space or a separator between reads
+	// ("上午9:02", "上午 9:02"), which must not make the same control a new one.
+	const loose = (value: string) => value.replace(/[\s\p{P}]+/gu, "");
 	const keyOf = (target: ObservedTarget | undefined) =>
-		target ? target.identifier || `${target.role ?? ""}|${target.label}` : "";
+		target ? target.identifier || `${target.role ?? ""}|${loose(target.label)}` : "";
 	const offered = (data: Observation): Observation =>
 		inert.size === 0
 			? data
@@ -207,7 +216,14 @@ export async function runJev(
 	const textCache = new Map<string, { text: string | null; usage?: ModelUsage }>();
 	const started = performance.now();
 	let failure: { stage: string; category: string; detail?: string } | undefined;
-	const finish = (status: RunStatus, message: string, stopReason: StopReason) => ({
+	// The observation taken after an action is the state the next decision is made
+	// on, so it is carried into the next evaluation instead of being read again.
+	// On a desktop surface a read is the expensive part of a step.
+	let carried: ObservationSnapshot | undefined;
+	const finish = (status: RunStatus, message: string, stopReason: StopReason) => {
+		void carried?.dispose().catch(() => undefined);
+		carried = undefined;
+		return {
 		failure,
 		status,
 		message,
@@ -218,7 +234,8 @@ export async function runJev(
 		page: lastPage,
 		warnings: warnings.length > 0 ? warnings : undefined,
 		plan,
-	});
+	};
+	};
 	try {
 		for (
 			let evaluation = 1;
@@ -229,7 +246,8 @@ export async function runJev(
 			stage = "observation";
 			signal.throwIfAborted();
 			const surface = await options.driver.id();
-			const snapshot = await options.driver.observe(signal);
+			const snapshot = carried ?? (await options.driver.observe(signal));
+			carried = undefined;
 			lastPage = {
 				url: snapshot.data.url,
 				title: snapshot.data.title,
@@ -477,14 +495,16 @@ export async function runJev(
 				const after = await options.driver.observe(signal);
 				try {
 					const pageChanged =
-						JSON.stringify(after.data) !== JSON.stringify(snapshot.data);
-					const stateKey = JSON.stringify(after.data);
+						loose(JSON.stringify(after.data)) !== loose(JSON.stringify(snapshot.data));
+					let withdrawn = false;
+					const stateKey = loose(JSON.stringify(after.data));
 					if (decision.target && !decision.operation.startsWith("SCROLL")) {
 						const key = keyOf(decision.target);
 						const strikes = pageChanged ? 0 : (inertPresses.get(key) ?? 0) + 1;
 						inertPresses.set(key, strikes);
 						if (strikes >= 2 && !inert.has(key)) {
 							inert.add(key);
+							withdrawn = true;
 							// Withdrawing a control changes the question even though the surface
 							// did not move, so the no-progress count starts again from here.
 							fruitless = 0;
@@ -513,7 +533,7 @@ export async function runJev(
 					} else {
 						identicalActions = 1;
 						stateRepeats = pageChanged ? 0 : 1;
-						repeatStates = [JSON.stringify(snapshot.data)];
+						repeatStates = [loose(JSON.stringify(snapshot.data))];
 					}
 					if (pageChanged) {
 						repeatStates.push(stateKey);
@@ -549,7 +569,19 @@ export async function runJev(
 							? (transitions.get(transition) ?? 0) + 1
 							: 0;
 					if (seen > 0) transitions.set(transition, seen);
-					if (seen >= MAX_STATE_REPEATS)
+					// An action that has led to this same state before produces nothing new,
+					// whether the surface moved or not (a bubble that highlights on click, a
+					// tab that reopens): its control is withdrawn from the next question, as
+					// a control that changes nothing is. The block below is for a policy that
+					// keeps choosing it anyway.
+					if (seen === 2 && decision.target && !inert.has(keyOf(decision.target))) {
+						inert.add(keyOf(decision.target));
+						withdrawn = true;
+						fruitless = 0;
+					}
+					// A control withdrawn this step cannot be chosen again, so the cycle it
+					// made is over; stopping now would end a run the next question fixes.
+					if (seen >= MAX_STATE_REPEATS && !withdrawn)
 						return finish(
 							"blocked",
 							`${decision.operation} on ${JSON.stringify(decision.target?.label ?? actionKey)} led to the same state ${seen} times; the run is cycling. Continue with jev_actions or revise the goal.`,
@@ -580,8 +612,9 @@ export async function runJev(
 							`Scroll direction alternated ${scrollReversals} times, so the loop is oscillating rather than exploring. Continue with jev_actions or revise the goal.`,
 							"scroll_oscillation",
 						);
+					carried = after;
 				} finally {
-					await after.dispose().catch(() => undefined);
+					if (carried !== after) await after.dispose().catch(() => undefined);
 				}
 			} catch (error) {
 				if (!(error instanceof StaleObservationError)) throw error;
@@ -615,6 +648,7 @@ export async function runJev(
 			executed >= maxSteps ? "step_limit" : "evaluation_limit",
 		);
 	} catch (error) {
+		await carried?.dispose().catch(() => undefined);
 		try {
 			await options.onFailure?.(error, stage);
 		} catch {

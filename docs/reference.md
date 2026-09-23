@@ -74,7 +74,7 @@ run might already have taken effect: inspect before continuing.
 | `repeated_action` | An identical action stopped producing new state (a control cycling between states it already produced), or ran 12 times in a row as a backstop. Repeated presses that keep producing new state are allowed, because entering `111` is legitimate input. |
 | `scroll_oscillation` | `SCROLL_UP` and `SCROLL_DOWN` alternated repeatedly, a two-cycle that is not exploration. |
 | `stale_observations` | Four consecutive observations were invalidated before an action could run. |
-| `no_progress` | Three actions produced no observable change. A control pressed twice without any change is withdrawn from the next question first, so the count starts again when the question changes; the run only stops when Jev keeps choosing fresh controls that change nothing. |
+| `no_progress` | Three actions produced no observable change. A control pressed twice without any change, or whose press led twice to a state already produced (a bubble that highlights, a tab that reopens), is withdrawn from the next question first, so the count starts again when the question changes; the run only stops when Jev keeps choosing fresh controls that change nothing. Whitespace and punctuation differences between reads do not count as change. |
 | `text_unavailable` | Neither the goal nor the pi text helper supplied a value for the field, so nothing was typed. |
 | `cancelled` / `error` | The run was aborted, or it failed; see `failure`. |
 
@@ -251,6 +251,24 @@ untouched. Hard-won details are encoded there:
   with no value, no actions and no children) is offered as a text target, read
   with text recognition, and typed into with keyboard events after a click places
   the caret.
+- Text recognition reads only what changed. The window capture is compared with
+  the previous one at 1/8 scale in 128-point tiles; unchanged tiles keep the lines
+  they produced last time, and only the rectangles around changed tiles are
+  recognised again (grown past any line they would cut, at most four). A window
+  that has not moved a pixel costs one capture and no recognition, which is what
+  makes the settle re-read and the pre-press re-walk cheap. The helper reports
+  `timing` (walk, capture, ocr, ocrRead as a percentage) on every observation.
+- A synthetic mouse click (the only way to choose a list row that exposes no
+  action) is refused unless the point hit-tests to the driven application: the
+  window may be on another Space, minimised, or covered, and the click would land
+  in whatever is there instead. The refusal reads as "covered", so the loop
+  re-observes rather than clicking elsewhere. Accessibility actions need no such
+  check.
+- The observation taken after an action is carried into the next decision
+  instead of being read again, so a step costs one read, not two.
+- Recognised lines of one or two characters with low confidence (an icon, a
+  badge, a cursor read as "口" or "-6") are dropped: they flicker between reads
+  and would make every observation a new state.
 - AXError `-25204` (cannot complete) and `-25205` (invalid element) are the
   application not answering in time and the control dying as a result of the
   press, not a refusal, when the window has changed since the observation.
